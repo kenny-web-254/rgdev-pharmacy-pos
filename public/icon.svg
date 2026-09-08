@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f766e" />
+      <stop offset="100%" stop-color="#042f2e" />
+    </linearGradient>
+    <linearGradient id="crossGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+    <linearGradient id="pillGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000000" flood-opacity="0.3" />
+    </filter>
+  </defs>
+
+  <!-- Background with squircle safe padding -->
+  <rect width="512" height="512" rx="108" fill="url(#bgGrad)" />
+
+  <!-- Outer subtle circular badge -->
+  <circle cx="256" cy="256" r="190" fill="none" stroke="#14b8a6" stroke-width="4" stroke-opacity="0.25" stroke-dasharray="8 8" />
+
+  <!-- Pharmacy Cross (Medical Plus) -->
+  <g filter="url(#shadow)">
+    <!-- Vertical bar -->
+    <rect x="220" y="128" width="72" height="256" rx="20" fill="url(#crossGrad)" />
+    <!-- Horizontal bar -->
+    <rect x="128" y="220" width="256" height="72" rx="20" fill="url(#crossGrad)" />
+  </g>
+
+  <!-- Central Emblem - Prescription Rx Stylized Capsule -->
+  <g transform="translate(256, 256) rotate(-35) translate(-256, -256)" filter="url(#shadow)">
+    <!-- Pill body left half -->
+    <path d="M 216 232 A 24 24 0 0 0 216 280 L 256 280 L 256 232 Z" fill="#ffffff" />
+    <!-- Pill body right half -->
+    <path d="M 256 232 L 296 232 A 24 24 0 0 1 296 280 L 256 280 Z" fill="url(#pillGrad)" />
+    <!-- Pill division shine line -->
+    <line x1="256" y1="230" x2="256" y2="282" stroke="#0f172a" stroke-width="2" stroke-opacity="0.4" />
+  </g>
+
+  <!-- Minimal Rx Badge Symbol -->
+  <circle cx="360" cy="152" r="32" fill="#0f766e" stroke="#34d399" stroke-width="3" />
+  <text x="360" y="160" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="20" fill="#ffffff" text-anchor="middle">Rx</text>
+</svg>

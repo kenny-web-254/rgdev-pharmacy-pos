@@ -1,5 +1,7 @@
 import {
   AuditLog,
+  CartItem,
+  InventoryFilters,
   Medication,
   Prescription,
   ReceiptSettings,
@@ -12,6 +14,7 @@ import {
   INITIAL_MEDICATIONS,
   INITIAL_PRESCRIPTIONS,
   INITIAL_RECEIPT_SETTINGS,
+  INITIAL_TRANSACTIONS,
 } from '../data/mockData';
 
 const STORAGE_KEYS = {
@@ -24,9 +27,109 @@ const STORAGE_KEYS = {
   USERS: 'pharmapos_users_v2',
   AUDIT_LOGS: 'pharmapos_audit_logs_v1',
   REGISTER_STATE: 'pharmapos_register_state_v1',
+  CART: 'pharmapos_cart_v1',
+  CART_PATIENT_NAME: 'pharmapos_cart_patient_name_v1',
+  LOGGED_OUT: 'pharmapos_is_logged_out_v2',
+};
+
+const SESSION_KEYS = {
+  INVENTORY_FILTERS: 'pharmapos_inventory_filters_session_v1',
 };
 
 export const storageService = {
+  // Inventory Filters Session Persistence
+  getInventoryFilters(): InventoryFilters {
+    const defaultFilters: InventoryFilters = {
+      searchTerm: '',
+      category: 'All',
+      supplier: 'All',
+      stockStatus: 'all',
+      expiryPreset: 'all',
+      expiryStartDate: '',
+      expiryEndDate: '',
+    };
+    try {
+      const data = sessionStorage.getItem(SESSION_KEYS.INVENTORY_FILTERS);
+      if (data) {
+        const parsed = JSON.parse(data);
+        return { ...defaultFilters, ...parsed };
+      }
+    } catch (e) {
+      console.error('Failed to load inventory filters from sessionStorage', e);
+    }
+    return defaultFilters;
+  },
+
+  saveInventoryFilters(filters: InventoryFilters): void {
+    try {
+      sessionStorage.setItem(SESSION_KEYS.INVENTORY_FILTERS, JSON.stringify(filters));
+    } catch (e) {
+      console.error('Failed to save inventory filters to sessionStorage', e);
+    }
+  },
+
+  clearInventoryFilters(): void {
+    try {
+      sessionStorage.removeItem(SESSION_KEYS.INVENTORY_FILTERS);
+    } catch (e) {
+      console.error('Failed to clear inventory filters from sessionStorage', e);
+    }
+  },
+
+  // Cart Persistence
+  getCart(): CartItem[] {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.CART);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.error('Failed to load cart from storage', e);
+    }
+    return [];
+  },
+
+  saveCart(cart: CartItem[]): void {
+    try {
+      if (!cart || cart.length === 0) {
+        localStorage.removeItem(STORAGE_KEYS.CART);
+      } else {
+        localStorage.setItem(STORAGE_KEYS.CART, JSON.stringify(cart));
+      }
+    } catch (e) {
+      console.error('Failed to save cart to storage', e);
+    }
+  },
+
+  clearCart(): void {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.CART);
+      localStorage.removeItem(STORAGE_KEYS.CART_PATIENT_NAME);
+    } catch (e) {
+      console.error('Failed to clear cart', e);
+    }
+  },
+
+  getCartPatientName(): string {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.CART_PATIENT_NAME) || '';
+    } catch (e) {
+      return '';
+    }
+  },
+
+  saveCartPatientName(name: string): void {
+    try {
+      if (name.trim()) {
+        localStorage.setItem(STORAGE_KEYS.CART_PATIENT_NAME, name);
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.CART_PATIENT_NAME);
+      }
+    } catch (e) {
+      // ignore
+    }
+  },
   // Medications (Inventory)
   getMedications(): Medication[] {
     try {
@@ -71,11 +174,15 @@ export const storageService = {
   getTransactions(): SaleTransaction[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
     } catch (e) {
-      console.error('Failed to load transactions', e);
+      console.error('Failed to load transactions from storage', e);
     }
-    return [];
+    this.saveTransactions(INITIAL_TRANSACTIONS);
+    return INITIAL_TRANSACTIONS;
   },
 
   saveTransactions(transactions: SaleTransaction[]): void {
@@ -451,10 +558,16 @@ export const storageService = {
   },
 
   // Active User / Auth
-  getActiveUser(): User {
+  getActiveUser(): User | null {
     try {
+      if (localStorage.getItem(STORAGE_KEYS.LOGGED_OUT) === 'true') {
+        return null;
+      }
       const data = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER);
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (parsed && parsed.id) return parsed;
+      }
     } catch (e) {
       console.error('Failed to load active user', e);
     }
@@ -464,10 +577,79 @@ export const storageService = {
 
   saveActiveUser(user: User): void {
     try {
+      localStorage.removeItem(STORAGE_KEYS.LOGGED_OUT);
       localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, JSON.stringify(user));
     } catch (e) {
       console.error('Failed to save active user', e);
     }
+  },
+
+  logoutActiveUser(user?: User | null): void {
+    try {
+      if (user) {
+        this.addAuditLog({
+          userId: user.id,
+          userName: user.name,
+          userRole: user.role,
+          action: 'USER_LOGOUT',
+          details: `User signed out of account session (@${user.username})`,
+          category: 'AUTH',
+        });
+      }
+      localStorage.removeItem(STORAGE_KEYS.ACTIVE_USER);
+      localStorage.setItem(STORAGE_KEYS.LOGGED_OUT, 'true');
+    } catch (e) {
+      console.error('Failed to logout user', e);
+    }
+  },
+
+  authenticateUser(username: string, passwordInput: string): { success: boolean; user?: User; error?: string } {
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanPassword = passwordInput.trim();
+
+    if (!cleanUsername) {
+      return { success: false, error: 'Please enter your username.' };
+    }
+    if (!cleanPassword) {
+      return { success: false, error: 'Please enter your password.' };
+    }
+
+    const allUsers = this.getUsers();
+    const matched = allUsers.find((u) => u.username.toLowerCase() === cleanUsername);
+
+    if (!matched) {
+      return { success: false, error: 'Invalid username or credentials.' };
+    }
+
+    if (matched.status === 'inactive') {
+      return { success: false, error: 'This account has been deactivated. Please contact an Administrator.' };
+    }
+
+    const expectedPassword = matched.password || matched.username;
+    if (cleanPassword !== expectedPassword) {
+      return { success: false, error: 'Incorrect password for this account.' };
+    }
+
+    // Update lastLogin
+    const updatedUser: User = {
+      ...matched,
+      lastLogin: new Date().toISOString(),
+    };
+
+    const updatedList = allUsers.map((u) => (u.id === matched.id ? updatedUser : u));
+    this.saveUsers(updatedList);
+    this.saveActiveUser(updatedUser);
+
+    this.addAuditLog({
+      userId: updatedUser.id,
+      userName: updatedUser.name,
+      userRole: updatedUser.role,
+      action: 'USER_LOGIN',
+      details: `User authenticated and signed into account (@${updatedUser.username})`,
+      category: 'AUTH',
+    });
+
+    return { success: true, user: updatedUser };
   },
 
   // Reset demo data

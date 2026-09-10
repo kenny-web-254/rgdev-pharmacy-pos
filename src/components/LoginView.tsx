@@ -1,0 +1,163 @@
+import React, { useState } from 'react';
+import {
+  AlertCircle,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Lock,
+  LogIn,
+  ShieldCheck,
+  User as UserIcon,
+} from 'lucide-react';
+import { User } from '../types';
+import { storageService } from '../services/storage';
+
+interface LoginViewProps {
+  onLogin: (user: User) => void;
+  pharmacyName?: string;
+}
+
+export const LoginView: React.FC<LoginViewProps> = ({
+  onLogin,
+  pharmacyName = 'AfyaCare Pharmacy & Wellness',
+}) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setIsSubmitting(true);
+
+    const result = storageService.authenticateUser(username, password);
+
+    if (!result.success || !result.user) {
+      setError(result.error || 'Invalid credentials. Please verify username and password.');
+      setIsSubmitting(false);
+      return;
+    }
+
+    setIsSubmitting(false);
+    onLogin(result.user);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 flex flex-col justify-center items-center p-4 sm:p-6 relative overflow-hidden">
+      {/* Subtle Background Pattern */}
+      <div className="absolute inset-0 bg-[radial-gradient(#14b8a6_1px,transparent_1px)] [background-size:24px_24px] opacity-10 pointer-events-none" />
+
+      <div className="w-full max-w-md relative z-10 animate-fade-in">
+        {/* Pharmacy Branding Card */}
+        <div className="text-center mb-6">
+          <div className="w-14 h-14 rounded-2xl bg-teal-600 text-white flex items-center justify-center mx-auto shadow-lg shadow-teal-500/20 mb-3 border border-teal-400/30">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              className="w-8 h-8 text-teal-100"
+            >
+              <path d="M19 10.5h-5.5V5a1.5 1.5 0 00-3 0v5.5H5a1.5 1.5 0 000 3h5.5V19a1.5 1.5 0 003 0v-5.5H19a1.5 1.5 0 000-3z" />
+            </svg>
+          </div>
+          <h1 className="text-xl font-black text-white tracking-tight">{pharmacyName}</h1>
+          <p className="text-xs text-teal-300/80 font-medium mt-1">
+            Pharmacy Dispensing & Point-of-Sale System
+          </p>
+        </div>
+
+        {/* Authentication Card */}
+        <div className="bg-white rounded-3xl shadow-2xl border border-slate-100 p-6 sm:p-8 space-y-5">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div>
+              <h2 className="text-base font-bold text-slate-900">Account Sign In</h2>
+              <p className="text-xs text-slate-500">
+                Sign in with your designated credentials to access your account
+              </p>
+            </div>
+            <div className="w-8 h-8 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center">
+              <Lock className="w-4 h-4" />
+            </div>
+          </div>
+
+          {error && (
+            <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="flex-1 font-medium leading-relaxed">{error}</div>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Username
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                  <UserIcon className="w-4 h-4" />
+                </div>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Enter your username"
+                  className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-600 focus:border-transparent transition"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Password
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-600 focus:border-transparent transition"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 transition"
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full py-3 px-4 bg-teal-700 hover:bg-teal-800 active:scale-[0.98] text-white rounded-xl text-xs font-bold shadow-sm transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>{isSubmitting ? 'Authenticating...' : 'Sign In to Account'}</span>
+            </button>
+          </form>
+
+          <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-500 space-y-1.5">
+            <div className="flex items-center gap-1.5 text-teal-800 font-semibold">
+              <ShieldCheck className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+              <span>Restricted Pharmacy Access</span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-slate-400">
+              Authorized personnel only. Please contact your system administrator if you require account access or assistance.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

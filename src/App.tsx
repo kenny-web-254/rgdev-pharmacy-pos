@@ -15,7 +15,7 @@ import { UserProfileView } from './components/UserProfileView';
 import { AuditLogsView } from './components/AuditLogsView';
 import { BarcodeScannerModal } from './components/BarcodeScannerModal';
 import { ReceiptModal } from './components/ReceiptModal';
-import { UserSwitchModal } from './components/UserSwitchModal';
+import { LoginView } from './components/LoginView';
 import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import {
@@ -35,10 +35,9 @@ import { CheckCircle2, Info, Lock, ShieldAlert } from 'lucide-react';
 export default function App() {
   // Navigation & Role State
   const [activeTab, setActiveTab] = useState<AppNavTab>('pos');
-  const [currentUser, setCurrentUser] = useState<User>(() => storageService.getActiveUser());
+  const [currentUser, setCurrentUser] = useState<User | null>(() => storageService.getActiveUser());
   const [users, setUsers] = useState<User[]>(() => storageService.getUsers());
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => storageService.getAuditLogs());
-  const [isUserSwitchOpen, setIsUserSwitchOpen] = useState(false);
 
   // Core Pharmacy Data
   const [medications, setMedications] = useState<Medication[]>(() => storageService.getMedications());
@@ -47,8 +46,27 @@ export default function App() {
   const [offlineQueue, setOfflineQueue] = useState<SaleTransaction[]>(() => storageService.getOfflineQueue());
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(() => storageService.getReceiptSettings());
 
-  // POS State
-  const [cart, setCart] = useState<CartItem[]>([]);
+  // POS State with localStorage persistence and live medication data reconciliation
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    const saved = storageService.getCart();
+    const currentMeds = storageService.getMedications();
+    return saved
+      .filter((item) => currentMeds.some((m) => m.id === item.medication.id))
+      .map((item) => {
+        const liveMed = currentMeds.find((m) => m.id === item.medication.id)!;
+        const validQuantity = Math.min(item.quantity, Math.max(1, liveMed.stock));
+        return {
+          ...item,
+          medication: liveMed,
+          quantity: validQuantity,
+        };
+      });
+  });
+
+  // Save cart to localStorage automatically on any cart change
+  useEffect(() => {
+    storageService.saveCart(cart);
+  }, [cart]);
 
   // Modals
   const [isScannerOpen, setIsScannerOpen] = useState(false);
@@ -73,14 +91,14 @@ export default function App() {
 
   // Enforce access control on tab state: non-admin cannot be on admin-only tabs
   useEffect(() => {
-    if (currentUser.role !== 'admin') {
+    if (currentUser && currentUser.role !== 'admin') {
       const adminOnlyTabs: AppNavTab[] = ['users', 'reports', 'settings', 'audit'];
       if (adminOnlyTabs.includes(activeTab)) {
         setActiveTab('pos');
         showToast('Access restricted: That module requires Administrator privileges.', 'warning');
       }
     }
-  }, [currentUser.role, activeTab]);
+  }, [currentUser?.role, activeTab]);
 
   // Sync Offline Queue when returning online or manually triggered
   const handleSyncOfflineQueue = () => {
@@ -120,7 +138,7 @@ export default function App() {
 
   // Inventory Management Handlers with Authorization Enforcement
   const handleUpdateMedication = (updated: Medication) => {
-    if (currentUser.role !== 'admin') {
+    if (!currentUser || currentUser.role !== 'admin') {
       showToast('Unauthorized: Only administrators can modify stock or pricing.', 'warning');
       return;
     }
@@ -142,7 +160,7 @@ export default function App() {
   };
 
   const handleAddMedication = (newItem: Medication) => {
-    if (currentUser.role !== 'admin') {
+    if (!currentUser || currentUser.role !== 'admin') {
       showToast('Unauthorized: Only administrators can add products.', 'warning');
       return;
     }
@@ -164,7 +182,7 @@ export default function App() {
   };
 
   const handleDeleteMedication = (id: string) => {
-    if (currentUser.role !== 'admin') {
+    if (!currentUser || currentUser.role !== 'admin') {
       showToast('Unauthorized: Only administrators can delete products.', 'warning');
       return;
     }
@@ -185,6 +203,43 @@ export default function App() {
     setAuditLogs(storageService.getAuditLogs());
 
     showToast(`Removed ${item?.name || 'item'} from inventory.`, 'info');
+  };
+
+  const handleAdjustStock = (
+    medicationId: string,
+    newStock: number,
+    reason: string,
+    newBatchNumber?: string,
+    newExpiryDate?: string
+  ) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      showToast('Unauthorized: Only administrators can adjust stock levels.', 'warning');
+      return;
+    }
+    const med = medications.find((m) => m.id === medicationId);
+    if (!med) return;
+    const prevStock = med.stock;
+    const diff = newStock - prevStock;
+    const updated: Medication = {
+      ...med,
+      stock: Math.max(0, newStock),
+      batchNumber: newBatchNumber || med.batchNumber,
+      expiryDate: newExpiryDate || med.expiryDate,
+    };
+    const updatedList = medications.map((m) => (m.id === medicationId ? updated : m));
+    setMedications(updatedList);
+    storageService.saveMedications(updatedList);
+
+    storageService.addAuditLog({
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'STOCK_ADJUSTMENT',
+      details: `Product: "${med.name}" | Previous: ${prevStock} | New: ${newStock} | Adjustment: ${diff >= 0 ? '+' : ''}${diff} | Reason: ${reason}`,
+      category: 'INVENTORY',
+    });
+    setAuditLogs(storageService.getAuditLogs());
+    showToast(`Stock adjusted for ${med.name}: ${prevStock} -> ${newStock} (${diff >= 0 ? '+' : ''}${diff})`, 'success');
   };
 
   // Prescription Management Handlers
@@ -317,17 +372,19 @@ export default function App() {
     storageService.saveTransactions(newTxList);
 
     // 4. Log Audit Trail
-    storageService.addAuditLog({
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userRole: currentUser.role,
-      action: 'SALE_COMPLETED',
-      details: `Sale ${transaction.receiptNumber} recorded (${transaction.items.length} items, Total: ${formatKSh(
-        transaction.total
-      )}, Method: ${transaction.paymentMethod})`,
-      category: 'SALES',
-    });
-    setAuditLogs(storageService.getAuditLogs());
+    if (currentUser) {
+      storageService.addAuditLog({
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userRole: currentUser.role,
+        action: 'SALE_COMPLETED',
+        details: `Sale ${transaction.receiptNumber} recorded (${transaction.items.length} items, Total: ${formatKSh(
+          transaction.total
+        )}, Method: ${transaction.paymentMethod})`,
+        category: 'SALES',
+      });
+      setAuditLogs(storageService.getAuditLogs());
+    }
 
     // 5. Handle Offline Queueing if offline
     if (transaction.isOffline) {
@@ -342,21 +399,22 @@ export default function App() {
     setReceiptModalTx(transaction);
   };
 
-  // Role switching
-  const handleSwitchUser = (user: User) => {
+  // Authentication & Session
+  const handleLogin = (user: User) => {
     setCurrentUser(user);
-    storageService.saveActiveUser(user);
-    setIsUserSwitchOpen(false);
-
-    // If non-admin cannot view settings, reports, users or audit, bounce to POS
     if (user.role !== 'admin') {
       const adminOnly: AppNavTab[] = ['users', 'reports', 'settings', 'audit'];
       if (adminOnly.includes(activeTab)) {
         setActiveTab('pos');
       }
     }
+    showToast(`Signed into session as ${user.name}`, 'success');
+  };
 
-    showToast(`Active session switched to ${user.name} (${user.role.toUpperCase()}).`, 'info');
+  const handleLogout = () => {
+    storageService.logoutActiveUser(currentUser);
+    setCurrentUser(null);
+    showToast('Signed out of session.', 'info');
   };
 
   // Low stock calculation
@@ -367,6 +425,38 @@ export default function App() {
   const todayTransactions = transactions.filter((t) => new Date(t.timestamp).toDateString() === today);
   const todayRevenue = todayTransactions.reduce((sum, t) => sum + t.total, 0);
   const todayRevenueFormatted = formatKSh(todayRevenue);
+
+  // If user is logged out, render standalone login authentication screen
+  if (!currentUser) {
+    return (
+      <>
+        {toastMessage && (
+          <div className="fixed top-6 right-4 z-50 animate-fade-in no-print max-w-sm">
+            <div
+              className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl shadow-xl text-xs font-semibold border ${
+                toastMessage.type === 'success'
+                  ? 'bg-teal-900 text-white border-teal-700'
+                  : toastMessage.type === 'warning'
+                  ? 'bg-amber-900 text-white border-amber-700'
+                  : 'bg-slate-900 text-white border-slate-700'
+              }`}
+            >
+              {toastMessage.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
+              ) : (
+                <Info className="w-4 h-4 text-amber-400 shrink-0" />
+              )}
+              <span>{toastMessage.text}</span>
+            </div>
+          </div>
+        )}
+        <LoginView
+          onLogin={handleLogin}
+          pharmacyName={receiptSettings.pharmacyName}
+        />
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row font-sans text-slate-800">
@@ -398,14 +488,13 @@ export default function App() {
         onSelectTab={(tab) => {
           const adminOnlyTabs: AppNavTab[] = ['users', 'reports', 'settings', 'audit'];
           if (adminOnlyTabs.includes(tab) && currentUser.role !== 'admin') {
-            setIsUserSwitchOpen(true);
             showToast('Administrator clearance required to access this module.', 'warning');
             return;
           }
           setActiveTab(tab);
         }}
         currentUser={currentUser}
-        onOpenUserSwitch={() => setIsUserSwitchOpen(true)}
+        onLogout={handleLogout}
         lowStockCount={lowStockCount}
         isOnline={isOnline}
         isSimulatedOffline={isSimulatedOffline}
@@ -451,6 +540,7 @@ export default function App() {
               onUpdateMedication={handleUpdateMedication}
               onAddMedication={handleAddMedication}
               onDeleteMedication={handleDeleteMedication}
+              onAdjustStock={handleAdjustStock}
               onAddToCart={(med) => {
                 const existingIdx = cart.findIndex((i) => i.medication.id === med.id);
                 if (existingIdx > -1) {
@@ -464,7 +554,6 @@ export default function App() {
                 setActiveTab('pos');
               }}
               userRole={currentUser.role}
-              onRequestRoleSwitch={() => setIsUserSwitchOpen(true)}
             />
           )}
 
@@ -497,7 +586,6 @@ export default function App() {
                 showToast('Receipt customization settings updated & saved!', 'success');
               }}
               userRole={currentUser.role}
-              onRequestRoleSwitch={() => setIsUserSwitchOpen(true)}
             />
           )}
 
@@ -505,11 +593,11 @@ export default function App() {
           {activeTab === 'reports' && currentUser.role === 'admin' && (
             <ReportsView
               transactions={transactions}
+              medications={medications}
               offlineQueueCount={offlineQueue.length}
               onSyncOfflineQueue={handleSyncOfflineQueue}
               onViewReceipt={(tx) => setReceiptModalTx(tx)}
               userRole={currentUser.role}
-              onRequestRoleSwitch={() => setIsUserSwitchOpen(true)}
             />
           )}
 
@@ -527,6 +615,7 @@ export default function App() {
                 refreshUsersAndLogs();
               }}
               onShowToast={showToast}
+              onLogout={handleLogout}
             />
           )}
         </main>
@@ -548,14 +637,6 @@ export default function App() {
           onClose={() => setReceiptModalTx(null)}
         />
       )}
-
-      {/* User Role Switcher Modal (Demo Switch + Manual Login) */}
-      <UserSwitchModal
-        isOpen={isUserSwitchOpen}
-        onClose={() => setIsUserSwitchOpen(false)}
-        currentUser={currentUser}
-        onSwitchUser={handleSwitchUser}
-      />
     </div>
   );
 }

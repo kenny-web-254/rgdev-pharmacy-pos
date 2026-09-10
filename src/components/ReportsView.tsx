@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Activity,
   ArrowDownRight,
   BarChart3,
   Calendar,
@@ -10,31 +11,34 @@ import {
   Eye,
   FileText,
   Filter,
+  Layers,
   RefreshCw,
   Search,
   ShoppingCart,
   TrendingUp,
 } from 'lucide-react';
-import { SaleTransaction, UserRole } from '../types';
+import { Medication, SaleTransaction, UserRole } from '../types';
 import { formatKSh } from '../utils/currency';
+import { SalesPerformanceOverview } from './SalesPerformanceOverview';
 
 interface ReportsViewProps {
   transactions: SaleTransaction[];
+  medications?: Medication[];
   offlineQueueCount: number;
   onSyncOfflineQueue: () => void;
   onViewReceipt: (transaction: SaleTransaction) => void;
   userRole: UserRole;
-  onRequestRoleSwitch: () => void;
 }
 
 export const ReportsView: React.FC<ReportsViewProps> = ({
   transactions,
+  medications = [],
   offlineQueueCount,
   onSyncOfflineQueue,
   onViewReceipt,
   userRole,
-  onRequestRoleSwitch,
 }) => {
+  const [adminSubView, setAdminSubView] = useState<'performance' | 'ledger' | 'all'>('performance');
   const [searchTerm, setSearchTerm] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<string>('All');
 
@@ -99,19 +103,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   if (!isAdmin) {
     return (
       <div className="bg-white p-8 rounded-2xl border border-slate-200 text-center space-y-4 max-w-lg mx-auto shadow-xs">
-        <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center mx-auto">
+        <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-800 border border-amber-200 flex items-center justify-center mx-auto">
           <BarChart3 className="w-6 h-6" />
         </div>
         <h2 className="text-base font-bold text-slate-900">Administrator Clearance Required</h2>
         <p className="text-xs text-slate-500">
-          Financial sales audit and daily reporting are restricted to Administrator and Supervising Pharmacist roles.
+          Financial sales audit and daily reporting are restricted to Administrator and Supervising Pharmacist roles. Your account does not have authorization to view this module.
         </p>
-        <button
-          onClick={onRequestRoleSwitch}
-          className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-semibold shadow-xs"
-        >
-          Switch to Admin Account
-        </button>
       </div>
     );
   }
@@ -151,49 +149,111 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-xs text-slate-500 font-semibold uppercase">Gross Revenue</span>
-          <div className="text-2xl font-extrabold text-slate-900 mt-1 font-mono">
-            {formatKSh(totalRevenue)}
-          </div>
-          <div className="text-[11px] text-teal-700 font-medium mt-1 flex items-center gap-1">
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>{transactions.length} registered transaction{transactions.length === 1 ? '' : 's'}</span>
-          </div>
+      {/* Sub-view Navigation Switcher */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-100/90 p-1.5 rounded-2xl border border-slate-200">
+        <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0">
+          <button
+            type="button"
+            id="tab-subview-performance"
+            onClick={() => setAdminSubView('performance')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              adminSubView === 'performance'
+                ? 'bg-white text-teal-900 shadow-xs border border-slate-200/60'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <TrendingUp className="w-4 h-4 text-teal-600" />
+            <span>Sales Performance Overview</span>
+          </button>
+
+          <button
+            type="button"
+            id="tab-subview-ledger"
+            onClick={() => setAdminSubView('ledger')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              adminSubView === 'ledger'
+                ? 'bg-white text-teal-900 shadow-xs border border-slate-200/60'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <FileText className="w-4 h-4 text-slate-600" />
+            <span>Transaction Ledger & Receipts</span>
+          </button>
+
+          <button
+            type="button"
+            id="tab-subview-all"
+            onClick={() => setAdminSubView('all')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition ${
+              adminSubView === 'all'
+                ? 'bg-white text-teal-900 shadow-xs border border-slate-200/60'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Layers className="w-4 h-4 text-slate-600" />
+            <span>Combined View</span>
+          </button>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-xs text-slate-500 font-semibold uppercase">Prescriptions Dispensed</span>
-          <div className="text-2xl font-extrabold text-teal-800 mt-1">
-            {totalPrescriptionsDispensed}
-          </div>
-          <div className="text-[11px] text-slate-500 mt-1">
-            Pharmacist verified & logged
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-xs text-slate-500 font-semibold uppercase">Total Units Sold</span>
-          <div className="text-2xl font-extrabold text-slate-900 mt-1">
-            {totalItemsSold}
-          </div>
-          <div className="text-[11px] text-slate-500 mt-1">
-            Deducted from active shelf inventory
-          </div>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-          <span className="text-xs text-slate-500 font-semibold uppercase">Sales Tax Remitted (VAT)</span>
-          <div className="text-2xl font-extrabold text-slate-900 mt-1 font-mono">
-            {formatKSh(totalTaxCollected)}
-          </div>
-          <div className="text-[11px] text-slate-500 mt-1">
-            KRA 16% standard VAT
-          </div>
+        <div className="text-[11px] text-slate-500 px-2 font-medium hidden md:block">
+          {transactions.length} total logged transactions
         </div>
       </div>
+
+      {/* Visual Analytics: Daily Trends & Top Selling Medications */}
+      {(adminSubView === 'performance' || adminSubView === 'all') && (
+        <SalesPerformanceOverview
+          transactions={transactions}
+          medications={medications}
+        />
+      )}
+
+      {/* Audit Ledger & KPI Cards */}
+      {(adminSubView === 'ledger' || adminSubView === 'all') && (
+        <>
+          {/* KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Gross Revenue</span>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1 font-mono">
+                {formatKSh(totalRevenue)}
+              </div>
+              <div className="text-[11px] text-teal-700 font-medium mt-1 flex items-center gap-1">
+                <TrendingUp className="w-3.5 h-3.5" />
+                <span>{transactions.length} registered transaction{transactions.length === 1 ? '' : 's'}</span>
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Prescriptions Dispensed</span>
+              <div className="text-2xl font-extrabold text-teal-800 mt-1">
+                {totalPrescriptionsDispensed}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                Pharmacist verified & logged
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Total Units Sold</span>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1">
+                {totalItemsSold}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                Deducted from active shelf inventory
+              </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+              <span className="text-xs text-slate-500 font-semibold uppercase">Sales Tax Remitted (VAT)</span>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1 font-mono">
+                {formatKSh(totalTaxCollected)}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                KRA 16% standard VAT
+              </div>
+            </div>
+          </div>
 
       {/* Transactions Ledger */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden space-y-3 p-5">
@@ -304,6 +364,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           </table>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 };

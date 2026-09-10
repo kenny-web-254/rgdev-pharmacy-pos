@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   KeyRound,
   Lock,
+  LogOut,
   Mail,
   Phone,
   Shield,
@@ -20,12 +21,14 @@ interface UserProfileViewProps {
   currentUser: User;
   onUpdateCurrentUser: (updated: User) => void;
   onShowToast: (message: string, type: 'success' | 'warning' | 'info') => void;
+  onLogout?: () => void;
 }
 
 export const UserProfileView: React.FC<UserProfileViewProps> = ({
   currentUser,
   onUpdateCurrentUser,
   onShowToast,
+  onLogout,
 }) => {
   // Form states for personal details
   const [name, setName] = useState(currentUser.name);
@@ -41,8 +44,8 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
 
-  const isAdmin = currentUser.role === 'admin';
-  const normalizedRole = currentUser.role === 'cashier' ? 'staff' : currentUser.role;
+  const isAdmin = currentUser?.role === 'admin';
+  const normalizedRole = currentUser?.role === 'cashier' ? 'staff' : (currentUser?.role || 'staff');
 
   // Handle Save Personal Info
   const handleSaveProfile = (e: React.FormEvent) => {
@@ -316,6 +319,28 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
             </button>
           </form>
         </div>
+
+        {/* Session Security & Sign Out */}
+        {onLogout && (
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xs font-bold text-slate-800">Account Session</h3>
+                <p className="text-[11px] text-slate-500">
+                  Signed in as <span className="font-semibold text-slate-700">@{currentUser.username}</span>. Remember to end your session when leaving your station.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onLogout}
+                className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

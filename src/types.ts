@@ -143,6 +143,10 @@ export interface SaleTransaction {
   mpesaReference?: string;
   mpesaPhone?: string;
   patientName?: string;
+  cardAuthCode?: string;
+  insuranceProvider?: string;
+  insurancePolicyNumber?: string;
+  insuranceAuthCode?: string;
   isOffline: boolean;
   synced: boolean;
   syncTimestamp?: string;
@@ -182,3 +186,23 @@ export interface InventoryAlert {
   expiryDate?: string;
   message: string;
 }
+
+export type ExpiryFilterPreset =
+  | 'all'
+  | 'expired'
+  | 'expiring_30'
+  | 'expiring_90'
+  | 'expiring_180'
+  | 'expiring_365'
+  | 'custom';
+
+export interface InventoryFilters {
+  searchTerm: string;
+  category: string; // 'All' or specific category
+  supplier: string; // 'All' or specific manufacturer
+  stockStatus: 'all' | 'low' | 'rx' | 'otc' | 'expiring';
+  expiryPreset: ExpiryFilterPreset;
+  expiryStartDate: string; // 'YYYY-MM-DD'
+  expiryEndDate: string; // 'YYYY-MM-DD'
+}
+

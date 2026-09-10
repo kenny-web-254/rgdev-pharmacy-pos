@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Barcode,
   Camera,
   Check,
+  CornerDownLeft,
   CreditCard,
   FileCheck,
   Minus,
@@ -19,6 +20,7 @@ import {
   Trash2,
   User,
   Wallet,
+  Zap,
 } from 'lucide-react';
 import {
   CartItem,
@@ -32,6 +34,7 @@ import {
 } from '../types';
 import { playScanSuccessBeep } from '../utils/audio';
 import { formatKSh } from '../utils/currency';
+import { storageService } from '../services/storage';
 
 interface POSTerminalProps {
   medications: Medication[];
@@ -59,10 +62,56 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [barcodeQuickInput, setBarcodeQuickInput] = useState('');
-  const [patientNameInput, setPatientNameInput] = useState('');
+  const [patientNameInput, setPatientNameInput] = useState(() => storageService.getCartPatientName());
+
+  // Quick Add search state for rapid typing & enter checkout
+  const [quickAddInput, setQuickAddInput] = useState('');
+  const [quickAddFeedback, setQuickAddFeedback] = useState<{
+    text: string;
+    type: 'success' | 'warning' | 'error';
+  } | null>(null);
+  const quickAddInputRef = useRef<HTMLInputElement>(null);
+
+  // Keyboard shortcut: Alt+Q jumps focus directly to Quick Add
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.key.toLowerCase() === 'q') {
+        e.preventDefault();
+        quickAddInputRef.current?.focus();
+        quickAddInputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Compute the first matching medication with prefix priority for Quick Add
+  const normalizedQuickAdd = quickAddInput.trim().toLowerCase();
+  const firstQuickAddMatch = normalizedQuickAdd
+    ? medications
+        .slice()
+        .sort((a, b) => {
+          const aStarts = a.name.toLowerCase().startsWith(normalizedQuickAdd);
+          const bStarts = b.name.toLowerCase().startsWith(normalizedQuickAdd);
+          if (aStarts && !bStarts) return -1;
+          if (!aStarts && bStarts) return 1;
+          const aGenStarts = a.genericName.toLowerCase().startsWith(normalizedQuickAdd);
+          const bGenStarts = b.genericName.toLowerCase().startsWith(normalizedQuickAdd);
+          if (aGenStarts && !bGenStarts) return -1;
+          if (!aGenStarts && bGenStarts) return 1;
+          return 0;
+        })
+        .find(
+          (m) =>
+            m.name.toLowerCase().includes(normalizedQuickAdd) ||
+            m.genericName.toLowerCase().includes(normalizedQuickAdd) ||
+            m.barcode.toLowerCase() === normalizedQuickAdd
+        )
+    : null;
 
   // Payment checkout modal state
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
 
   // Tender states
@@ -75,6 +124,17 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   // Partial payment states (Cash + M-Pesa)
   const [partialCash, setPartialCash] = useState<number>(0);
   const [partialMpesa, setPartialMpesa] = useState<number>(0);
+
+  // Card payment states
+  const [cardBankTerminal, setCardBankTerminal] = useState('Equity Bank PDQ');
+  const [cardType, setCardType] = useState('Visa Debit');
+  const [cardLast4, setCardLast4] = useState('');
+  const [cardAuthCode, setCardAuthCode] = useState('');
+
+  // Insurance payment states
+  const [insuranceProvider, setInsuranceProvider] = useState('Social Health Authority (SHA / NHIF)');
+  const [insurancePolicyNumber, setInsurancePolicyNumber] = useState('');
+  const [insuranceAuthCode, setInsuranceAuthCode] = useState('');
 
   const [discountPercent, setDiscountPercent] = useState<number>(0);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
@@ -91,6 +151,21 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
     'Vitamins & Supplements',
   ];
 
+  // Helper date checkers
+  const isExpired = (dateStr: string) => {
+    return new Date(dateStr).getTime() < new Date().getTime();
+  };
+
+  const isExpiringSoon = (dateStr: string) => {
+    const diffDays = (new Date(dateStr).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24);
+    return diffDays > 0 && diffDays <= 90;
+  };
+
+  const handlePatientNameChange = (name: string) => {
+    setPatientNameInput(name);
+    storageService.saveCartPatientName(name);
+  };
+
   // Filter medications
   const filteredMedications = medications.filter((m) => {
     const matchesSearch =
@@ -105,6 +180,12 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
 
   // Cart operations
   const handleAddToCart = (med: Medication, prescription?: Prescription) => {
+    // Safety check: block dispensing expired medicine
+    if (isExpired(med.expiryDate)) {
+      alert(`SAFETY BLOCK: Cannot dispense expired medication!\n\n${med.name} (Batch ${med.batchNumber}) expired on ${med.expiryDate}.\nThis item has been flagged for immediate pharmacy quarantine.`);
+      return;
+    }
+
     const existingIndex = cart.findIndex((item) => item.medication.id === med.id);
 
     if (existingIndex > -1) {
@@ -128,7 +209,6 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
       // Calculate co-pay discount if prescribed with insurance
       let itemDiscount = 0;
       if (prescription && prescription.insuranceCoPayRate !== undefined) {
-        // e.g. coPayRate = 0.2 means patient pays 20%, discount is 80%
         itemDiscount = (1 - prescription.insuranceCoPayRate) * 100;
       }
 
@@ -142,7 +222,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
       };
 
       if (prescription?.patientName && !patientNameInput) {
-        setPatientNameInput(prescription.patientName);
+        handlePatientNameChange(prescription.patientName);
       }
 
       onUpdateCart([...cart, newItem]);
@@ -170,14 +250,30 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
     onUpdateCart(updated);
   };
 
-  const handleRemoveFromCart = (index: number) => {
-    const updated = cart.filter((_, i) => i !== index);
+  const handleSetExactQuantity = (index: number, qty: number) => {
+    const item = cart[index];
+    if (isNaN(qty) || qty <= 0) return;
+    const clamped = Math.min(qty, item.medication.stock);
+    const updated = [...cart];
+    updated[index] = { ...item, quantity: clamped };
     onUpdateCart(updated);
   };
 
+  const handleRemoveFromCart = (index: number) => {
+    const updated = cart.filter((_, i) => i !== index);
+    onUpdateCart(updated);
+    if (updated.length === 0) {
+      handlePatientNameChange('');
+    }
+  };
+
   const handleClearCart = () => {
+    if (cart.length > 0 && !window.confirm('Are you sure you want to clear all items from the current cart?')) {
+      return;
+    }
     onUpdateCart([]);
-    setPatientNameInput('');
+    handlePatientNameChange('');
+    storageService.clearCart();
   };
 
   // Quick barcode input handler
@@ -214,6 +310,64 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
     alert(`Barcode "${code}" not found. Try scanning with camera or searching by drug name.`);
   };
 
+  // Quick Add submit handler (Typing partial name and pressing Enter immediately adds top match to cart)
+  const handleQuickAddSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const query = quickAddInput.trim();
+    if (!query) return;
+
+    if (!firstQuickAddMatch) {
+      setQuickAddFeedback({
+        text: `No medication found matching "${query}"`,
+        type: 'error',
+      });
+      setTimeout(() => setQuickAddFeedback(null), 3000);
+      return;
+    }
+
+    // Safety check: cannot dispense expired medication
+    if (isExpired(firstQuickAddMatch.expiryDate)) {
+      setQuickAddFeedback({
+        text: `SAFETY BLOCK: ${firstQuickAddMatch.name} is expired (${firstQuickAddMatch.expiryDate})!`,
+        type: 'error',
+      });
+      setTimeout(() => setQuickAddFeedback(null), 3500);
+      return;
+    }
+
+    // Stock availability check
+    if (firstQuickAddMatch.stock < 1) {
+      setQuickAddFeedback({
+        text: `Cannot add: ${firstQuickAddMatch.name} is out of stock!`,
+        type: 'warning',
+      });
+      setTimeout(() => setQuickAddFeedback(null), 3000);
+      return;
+    }
+
+    // Quantity check against cart
+    const existingInCart = cart.find((i) => i.medication.id === firstQuickAddMatch.id);
+    if (existingInCart && existingInCart.quantity + 1 > firstQuickAddMatch.stock) {
+      setQuickAddFeedback({
+        text: `Stock limit reached (${firstQuickAddMatch.stock} units available on shelf).`,
+        type: 'warning',
+      });
+      setTimeout(() => setQuickAddFeedback(null), 3000);
+      return;
+    }
+
+    handleAddToCart(firstQuickAddMatch);
+    setQuickAddFeedback({
+      text: `Added ${firstQuickAddMatch.name} (${firstQuickAddMatch.dosage}) to cart!`,
+      type: 'success',
+    });
+    setQuickAddInput('');
+    setTimeout(() => setQuickAddFeedback(null), 2500);
+
+    // Keep input focused for rapid subsequent entries
+    quickAddInputRef.current?.focus();
+  };
+
   // Financial calculations in Kenyan Shillings
   const subtotal = cart.reduce((acc, item) => {
     const basePrice = item.medication.price * item.quantity;
@@ -238,6 +392,14 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   // Trigger Checkout
   const handleStartCheckout = () => {
     if (cart.length === 0) return;
+
+    // Safety check for expired items in cart
+    const expiredItem = cart.find((item) => isExpired(item.medication.expiryDate));
+    if (expiredItem) {
+      alert(`SAFETY BLOCK: Cart contains expired medication "${expiredItem.medication.name}" (expired ${expiredItem.medication.expiryDate}). Please remove it before proceeding to checkout.`);
+      return;
+    }
+
     const roundedTotal = Math.ceil(total);
     setCashTendered(roundedTotal);
 
@@ -246,9 +408,12 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
     setPartialCash(half);
     setPartialMpesa(Math.max(0, roundedTotal - half));
 
-    // Generate random M-Pesa code
-    const randomCode = 'QA' + Math.floor(10000000 + Math.random() * 90000000).toString().slice(0, 8);
-    setMpesaReference(randomCode);
+    // Generate random codes
+    handleGenerateMpesaCode();
+    handleGenerateCardAuthCode();
+    if (!insuranceAuthCode) {
+      handleGenerateInsuranceClaimCode();
+    }
 
     setCheckoutError(null);
     setIsCheckoutOpen(true);
@@ -262,9 +427,31 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
     setMpesaReference(code);
   };
 
-  // Finalize Sale
+  // Generate Card PDQ Authorization Code
+  const handleGenerateCardAuthCode = () => {
+    const auth = 'AUTH-' + Math.floor(100000 + Math.random() * 900000);
+    setCardAuthCode(auth);
+  };
+
+  // Generate Insurance Claim Pre-Auth Code
+  const handleGenerateInsuranceClaimCode = () => {
+    const claim = 'CLM-' + Math.floor(100000 + Math.random() * 900000);
+    setInsuranceAuthCode(claim);
+  };
+
+  // Finalize Sale with duplicate submission guard
   const handleConfirmSale = () => {
+    if (isSubmitting) return;
     setCheckoutError(null);
+
+    // Safety check: ensure no expired medications in cart
+    const expiredInCart = cart.find((item) => isExpired(item.medication.expiryDate));
+    if (expiredInCart) {
+      setCheckoutError(
+        `Safety Block: Cart contains expired item (${expiredInCart.medication.name}, expired ${expiredInCart.medication.expiryDate}). Remove it to proceed.`
+      );
+      return;
+    }
 
     if (paymentMethod === 'Cash') {
       if (cashTendered < total) {
@@ -292,70 +479,98 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
         setCheckoutError('Please enter or generate the M-Pesa transaction confirmation code.');
         return;
       }
+    } else if (paymentMethod === 'Credit/Debit Card') {
+      if (!cardAuthCode.trim()) {
+        setCheckoutError('Please enter or generate the PDQ terminal authorization code.');
+        return;
+      }
+    } else if (paymentMethod === 'Insurance') {
+      if (!insurancePolicyNumber.trim()) {
+        setCheckoutError('Please enter the patient insurance member/policy number.');
+        return;
+      }
+      if (!insuranceAuthCode.trim()) {
+        setCheckoutError('Please enter or generate the insurance pre-authorization claim code.');
+        return;
+      }
     }
 
-    const receiptNumber = 'REC-' + Math.floor(100000 + Math.random() * 900000);
+    setIsSubmitting(true);
 
-    const transaction: SaleTransaction = {
-      id: 'tx-' + Date.now(),
-      receiptNumber,
-      timestamp: new Date().toISOString(),
-      cashierName: currentUser.name,
-      cashierRole: currentUser.role,
-      items: cart.map((it) => ({
-        medicationId: it.medication.id,
-        name: it.medication.name,
-        genericName: it.medication.genericName,
-        dosage: it.medication.dosage,
-        isPrescription: it.medication.isPrescriptionRequired,
-        rxNumber: it.rxNumber,
-        patientName: it.patientName || patientNameInput,
-        quantity: it.quantity,
-        unitPrice: it.medication.price,
-        totalPrice: it.medication.price * it.quantity * (1 - (it.discountPercent || 0) / 100),
-      })),
-      subtotal,
-      tax,
-      discount: cartDiscount,
-      total,
-      paymentMethod,
-      amountTendered:
-        paymentMethod === 'Cash'
-          ? cashTendered
-          : paymentMethod === 'Partial (Cash + M-Pesa)'
-          ? partialCash + partialMpesa
-          : total,
-      changeDue: paymentMethod === 'Cash' || paymentMethod === 'Partial (Cash + M-Pesa)' ? changeDue : 0,
-      cashAmount:
-        paymentMethod === 'Cash'
-          ? cashTendered
-          : paymentMethod === 'Partial (Cash + M-Pesa)'
-          ? partialCash
-          : undefined,
-      mpesaAmount:
-        paymentMethod === 'M-Pesa'
-          ? total
-          : paymentMethod === 'Partial (Cash + M-Pesa)'
-          ? partialMpesa
-          : undefined,
-      mpesaReference:
-        paymentMethod === 'M-Pesa' || paymentMethod === 'Partial (Cash + M-Pesa)'
-          ? mpesaReference.toUpperCase()
-          : undefined,
-      mpesaPhone:
-        paymentMethod === 'M-Pesa' || paymentMethod === 'Partial (Cash + M-Pesa)'
-          ? mpesaPhone
-          : undefined,
-      patientName: patientNameInput || undefined,
-      isOffline: !isOnline,
-      synced: isOnline,
-      syncTimestamp: isOnline ? new Date().toISOString() : undefined,
-    };
+    try {
+      const receiptNumber = 'REC-' + Math.floor(100000 + Math.random() * 900000);
 
-    onCompleteSale(transaction);
-    onUpdateCart([]);
-    setIsCheckoutOpen(false);
-    setPatientNameInput('');
+      const transaction: SaleTransaction = {
+        id: 'tx-' + Date.now(),
+        receiptNumber,
+        timestamp: new Date().toISOString(),
+        cashierName: currentUser.name,
+        cashierRole: currentUser.role,
+        items: cart.map((it) => ({
+          medicationId: it.medication.id,
+          name: it.medication.name,
+          genericName: it.medication.genericName,
+          dosage: it.medication.dosage,
+          isPrescription: it.medication.isPrescriptionRequired,
+          rxNumber: it.rxNumber,
+          patientName: it.patientName || patientNameInput,
+          quantity: it.quantity,
+          unitPrice: it.medication.price,
+          totalPrice: it.medication.price * it.quantity * (1 - (it.discountPercent || 0) / 100),
+        })),
+        subtotal,
+        tax,
+        discount: cartDiscount,
+        total,
+        paymentMethod,
+        amountTendered:
+          paymentMethod === 'Cash'
+            ? cashTendered
+            : paymentMethod === 'Partial (Cash + M-Pesa)'
+            ? partialCash + partialMpesa
+            : total,
+        changeDue: paymentMethod === 'Cash' || paymentMethod === 'Partial (Cash + M-Pesa)' ? changeDue : 0,
+        cashAmount:
+          paymentMethod === 'Cash'
+            ? cashTendered
+            : paymentMethod === 'Partial (Cash + M-Pesa)'
+            ? partialCash
+            : undefined,
+        mpesaAmount:
+          paymentMethod === 'M-Pesa'
+            ? total
+            : paymentMethod === 'Partial (Cash + M-Pesa)'
+            ? partialMpesa
+            : undefined,
+        mpesaReference:
+          paymentMethod === 'M-Pesa' || paymentMethod === 'Partial (Cash + M-Pesa)'
+            ? mpesaReference.toUpperCase()
+            : undefined,
+        mpesaPhone:
+          paymentMethod === 'M-Pesa' || paymentMethod === 'Partial (Cash + M-Pesa)'
+            ? mpesaPhone
+            : undefined,
+        patientName: patientNameInput || undefined,
+        cardAuthCode:
+          paymentMethod === 'Credit/Debit Card'
+            ? `${cardBankTerminal} [${cardType}] ${cardLast4 ? '••••' + cardLast4 : ''} - ${cardAuthCode.trim()}`
+            : undefined,
+        insuranceProvider: paymentMethod === 'Insurance' ? insuranceProvider : undefined,
+        insurancePolicyNumber: paymentMethod === 'Insurance' ? insurancePolicyNumber.trim() : undefined,
+        insuranceAuthCode: paymentMethod === 'Insurance' ? insuranceAuthCode.trim() : undefined,
+        isOffline: !isOnline,
+        synced: isOnline,
+        syncTimestamp: isOnline ? new Date().toISOString() : undefined,
+      };
+
+      onCompleteSale(transaction);
+      onUpdateCart([]);
+      storageService.clearCart();
+      setIsCheckoutOpen(false);
+      handlePatientNameChange('');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -398,37 +613,125 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
         <div className={`lg:col-span-7 space-y-4 ${mobilePosTab === 'catalog' ? 'block' : 'hidden lg:block'}`}>
           {/* Quick Barcode & Search Header */}
           <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-          <div className="flex gap-2">
-            {/* Rapid Barcode Input */}
-            <form onSubmit={handleBarcodeSubmit} className="relative flex-1">
-              <Barcode className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                id="pos-fast-barcode-input"
-                type="text"
-                value={barcodeQuickInput}
-                onChange={(e) => setBarcodeQuickInput(e.target.value)}
-                placeholder="Scan / Type Rx or NDC Barcode (Enter)..."
-                className="w-full pl-9 pr-20 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 font-mono"
-              />
-              <button
-                type="submit"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold"
-              >
-                Scan
-              </button>
+            {/* Quick Add Search Input (Type partial name & Enter) */}
+            <form onSubmit={handleQuickAddSubmit} className="space-y-1.5" id="pos-quick-add-form">
+              <div className="flex items-center justify-between">
+                <label htmlFor="pos-quick-add-input" className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-teal-700 fill-teal-700" />
+                  <span>Quick Add to Cart</span>
+                  <span className="text-[10px] font-normal text-slate-500 font-sans">(Type name &amp; press Enter)</span>
+                </label>
+                <span className="text-[10px] text-slate-400 font-mono hidden sm:inline-flex items-center gap-1">
+                  Shortcut: <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-slate-600 font-bold">Alt + Q</kbd>
+                </span>
+              </div>
+
+              <div className="relative">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-teal-700" />
+                <input
+                  ref={quickAddInputRef}
+                  id="pos-quick-add-input"
+                  type="text"
+                  value={quickAddInput}
+                  onChange={(e) => setQuickAddInput(e.target.value)}
+                  placeholder="Quick Add: Type partial product name (e.g. 'amox', 'panad', 'ibu') and press Enter..."
+                  className="w-full pl-9 pr-24 py-2.5 text-xs sm:text-sm bg-teal-50/40 border border-teal-300 rounded-xl focus:ring-2 focus:ring-teal-600 focus:bg-white text-slate-900 placeholder:text-slate-400 font-medium transition"
+                  autoComplete="off"
+                />
+                <button
+                  type="submit"
+                  disabled={!quickAddInput.trim()}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 px-3 py-1 bg-teal-700 hover:bg-teal-800 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-2xs transition active:scale-95 cursor-pointer"
+                  title="Press Enter to add first matching item to cart"
+                >
+                  <span>Add</span>
+                  <CornerDownLeft className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* Real-time Match Indicator or Feedback Alert */}
+              {quickAddFeedback ? (
+                <div
+                  className={`text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 font-semibold transition ${
+                    quickAddFeedback.type === 'success'
+                      ? 'bg-teal-50 text-teal-900 border border-teal-200'
+                      : quickAddFeedback.type === 'warning'
+                      ? 'bg-amber-50 text-amber-900 border border-amber-200'
+                      : 'bg-rose-50 text-rose-900 border border-rose-200'
+                  }`}
+                >
+                  {quickAddFeedback.type === 'success' ? (
+                    <Check className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                  )}
+                  <span>{quickAddFeedback.text}</span>
+                </div>
+              ) : firstQuickAddMatch ? (
+                <div className="text-xs px-3 py-1.5 rounded-lg bg-teal-50/60 border border-teal-200/80 flex flex-wrap items-center justify-between gap-1 text-slate-700">
+                  <div className="flex items-center gap-1.5 font-medium truncate">
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-teal-800 bg-white px-1.5 py-0.5 rounded border border-teal-200 shadow-2xs">
+                      1st Match
+                    </span>
+                    <span className="font-bold text-slate-900">{firstQuickAddMatch.name}</span>
+                    <span className="text-slate-500 text-[11px]">({firstQuickAddMatch.dosage} • {firstQuickAddMatch.form})</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] shrink-0">
+                    <span className="font-bold text-teal-800">{formatKSh(firstQuickAddMatch.price)}</span>
+                    <span
+                      className={`font-semibold ${
+                        firstQuickAddMatch.stock <= 0
+                          ? 'text-rose-600'
+                          : firstQuickAddMatch.stock <= firstQuickAddMatch.minStockLevel
+                          ? 'text-amber-600'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      Stock: {firstQuickAddMatch.stock}
+                    </span>
+                    <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono bg-white border border-teal-300 rounded shadow-2xs text-teal-900 font-bold">
+                      ↵ Enter to Add
+                    </kbd>
+                  </div>
+                </div>
+              ) : quickAddInput.trim() ? (
+                <div className="text-xs px-3 py-1 text-slate-500 italic bg-slate-50 rounded-lg border border-slate-200">
+                  No medication found matching &ldquo;{quickAddInput}&rdquo;
+                </div>
+              ) : null}
             </form>
 
-            {/* Camera Scanner Button */}
-            <button
-              id="open-pos-camera-scanner-btn"
-              onClick={onOpenScanner}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-semibold shadow-xs transition active:scale-95 whitespace-nowrap"
-              title="Open Barcode Scanner Camera"
-            >
-              <Camera className="w-4 h-4" />
-              <span>Camera Scan</span>
-            </button>
-          </div>
+            <div className="border-t border-slate-100 pt-2 flex gap-2">
+              {/* Rapid Barcode Input */}
+              <form onSubmit={handleBarcodeSubmit} className="relative flex-1">
+                <Barcode className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  id="pos-fast-barcode-input"
+                  type="text"
+                  value={barcodeQuickInput}
+                  onChange={(e) => setBarcodeQuickInput(e.target.value)}
+                  placeholder="Scan / Type Rx or NDC Barcode (Enter)..."
+                  className="w-full pl-9 pr-20 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 font-mono"
+                />
+                <button
+                  type="submit"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold"
+                >
+                  Scan
+                </button>
+              </form>
+
+              {/* Camera Scanner Button */}
+              <button
+                id="open-pos-camera-scanner-btn"
+                onClick={onOpenScanner}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-semibold shadow-xs transition active:scale-95 whitespace-nowrap"
+                title="Open Barcode Scanner Camera"
+              >
+                <Camera className="w-4 h-4" />
+                <span>Camera Scan</span>
+              </button>
+            </div>
 
           {/* Search by drug name & Generic */}
           <div className="relative">
@@ -465,13 +768,17 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           {filteredMedications.map((med) => {
             const isLow = med.stock <= med.minStockLevel;
             const isOut = med.stock === 0;
+            const expired = isExpired(med.expiryDate);
+            const expiringSoon = !expired && isExpiringSoon(med.expiryDate);
 
             return (
               <div
                 key={med.id}
-                onClick={() => !isOut && handleAddToCart(med)}
+                onClick={() => !isOut && !expired && handleAddToCart(med)}
                 className={`bg-white p-3.5 rounded-2xl border transition-all flex flex-col justify-between cursor-pointer group ${
-                  isOut
+                  expired
+                    ? 'border-rose-300 bg-rose-50/30 opacity-75 cursor-not-allowed'
+                    : isOut
                     ? 'opacity-50 border-slate-200 cursor-not-allowed'
                     : 'border-slate-200 hover:border-teal-500 hover:shadow-md'
                 }`}
@@ -490,14 +797,20 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
 
                     <span
                       className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
-                        isOut
+                        expired
+                          ? 'bg-rose-100 text-rose-700'
+                          : isOut
                           ? 'bg-red-100 text-red-700'
                           : isLow
                           ? 'bg-amber-100 text-amber-800'
                           : 'bg-slate-100 text-slate-600'
                       }`}
                     >
-                      {isOut ? 'Out of Stock' : `${med.stock} in stock`}
+                      {expired
+                        ? `Expired (${med.expiryDate})`
+                        : isOut
+                        ? 'Out of Stock'
+                        : `${med.stock} in stock`}
                     </span>
                   </div>
 
@@ -505,7 +818,14 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
                     {med.name}
                   </h3>
                   <p className="text-[11px] text-slate-500 italic line-clamp-1">{med.genericName}</p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">{med.dosage} • {med.form}</p>
+                  <div className="flex items-center justify-between text-[10px] text-slate-400 mt-0.5">
+                    <span>{med.dosage} • {med.form}</span>
+                    {expiringSoon && (
+                      <span className="text-amber-700 font-bold bg-amber-50 px-1 rounded">
+                        Exp: {med.expiryDate}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100">
@@ -513,8 +833,9 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
                     {formatKSh(med.price)}
                   </span>
                   <button
-                    disabled={isOut}
-                    className="p-1.5 rounded-xl bg-teal-50 text-teal-700 group-hover:bg-teal-700 group-hover:text-white transition"
+                    disabled={isOut || expired}
+                    className="p-1.5 rounded-xl bg-teal-50 text-teal-700 group-hover:bg-teal-700 group-hover:text-white transition disabled:opacity-40"
+                    title={expired ? 'Medication Expired' : isOut ? 'Out of Stock' : 'Add to Dispense Cart'}
                   >
                     <Plus className="w-4 h-4" />
                   </button>
@@ -620,23 +941,39 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
 
                     <div className="flex items-center gap-1.5">
                       <button
+                        type="button"
                         onClick={() => handleUpdateQuantity(idx, -1)}
                         className="w-6 h-6 rounded-lg bg-white border border-slate-300 flex items-center justify-center text-slate-700 hover:bg-slate-100 transition"
+                        title="Decrease quantity"
                       >
                         <Minus className="w-3 h-3" />
                       </button>
-                      <span className="w-7 text-center font-bold text-xs text-slate-800">
-                        {item.quantity}
-                      </span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={item.medication.stock}
+                        value={item.quantity}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10);
+                          handleSetExactQuantity(idx, val);
+                        }}
+                        className="w-10 text-center font-bold text-xs text-slate-900 border border-slate-300 rounded-md py-0.5 bg-white font-mono focus:ring-1 focus:ring-teal-500 focus:outline-none"
+                        title={`Enter quantity (1 to ${item.medication.stock})`}
+                      />
                       <button
+                        type="button"
                         onClick={() => handleUpdateQuantity(idx, 1)}
-                        className="w-6 h-6 rounded-lg bg-white border border-slate-300 flex items-center justify-center text-slate-700 hover:bg-slate-100 transition"
+                        disabled={item.quantity >= item.medication.stock}
+                        className="w-6 h-6 rounded-lg bg-white border border-slate-300 flex items-center justify-center text-slate-700 hover:bg-slate-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Increase quantity"
                       >
                         <Plus className="w-3 h-3" />
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleRemoveFromCart(idx)}
                         className="p-1 text-slate-400 hover:text-rose-600 ml-1 rounded-lg hover:bg-rose-50"
+                        title="Remove item"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -1050,21 +1387,159 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
                 </div>
               )}
 
-              {/* CARD PLACEHOLDER */}
+              {/* CARD PAYMENT SECTION */}
               {paymentMethod === 'Credit/Debit Card' && (
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-center space-y-1">
-                  <CreditCard className="w-6 h-6 mx-auto text-blue-600" />
-                  <p className="font-semibold text-slate-800">Kenyan Bank Card / PDQ Terminal</p>
-                  <p className="text-[11px] text-slate-500">Insert Visa / Mastercard on the banking terminal.</p>
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex items-center gap-2 pb-2 border-b border-slate-200 text-slate-800 font-bold text-xs">
+                    <CreditCard className="w-4 h-4 text-blue-600" />
+                    <span>Card / PDQ Terminal Payment</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                        Bank Terminal / PDQ
+                      </label>
+                      <select
+                        value={cardBankTerminal}
+                        onChange={(e) => setCardBankTerminal(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white"
+                      >
+                        <option value="Equity Bank PDQ">Equity Bank PDQ</option>
+                        <option value="KCB Bank POS">KCB Bank POS</option>
+                        <option value="Co-op Bank Terminal">Co-op Bank Terminal</option>
+                        <option value="Absa Kenya POS">Absa Kenya POS</option>
+                        <option value="Standard Chartered">Standard Chartered</option>
+                        <option value="NCBA Merchant POS">NCBA Merchant POS</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                        Card Type
+                      </label>
+                      <select
+                        value={cardType}
+                        onChange={(e) => setCardType(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs font-semibold border border-slate-300 rounded-lg bg-white"
+                      >
+                        <option value="Visa Debit">Visa Debit</option>
+                        <option value="Visa Credit">Visa Credit</option>
+                        <option value="Mastercard">Mastercard</option>
+                        <option value="American Express">American Express</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                        Card Last 4 Digits (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={4}
+                        placeholder="e.g. 4821"
+                        value={cardLast4}
+                        onChange={(e) => setCardLast4(e.target.value.replace(/\D/g, ''))}
+                        className="w-full px-2.5 py-1.5 text-xs font-bold border border-slate-300 rounded-lg font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] font-semibold text-slate-600">Approval / Auth Code</label>
+                        <button
+                          type="button"
+                          onClick={handleGenerateCardAuthCode}
+                          className="text-[9px] text-blue-700 font-bold hover:underline"
+                        >
+                          Generate
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="AUTH-982144"
+                        value={cardAuthCode}
+                        onChange={(e) => setCardAuthCode(e.target.value.toUpperCase())}
+                        className="w-full px-2.5 py-1.5 text-xs font-bold border border-slate-300 rounded-lg font-mono uppercase"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="p-2 rounded-lg bg-blue-50/80 border border-blue-200 text-[11px] text-blue-900 flex justify-between items-center">
+                    <span>Swiped / Tapped on POS terminal</span>
+                    <span className="font-bold text-blue-800">Amount: {formatKSh(total)}</span>
+                  </div>
                 </div>
               )}
 
-              {/* INSURANCE PLACEHOLDER */}
+              {/* INSURANCE PAYMENT SECTION */}
               {paymentMethod === 'Insurance' && (
-                <div className="p-3 bg-purple-50 rounded-xl border border-purple-200 text-purple-900 space-y-1 text-center">
-                  <FileCheck className="w-6 h-6 mx-auto text-purple-700" />
-                  <p className="font-semibold">SHA / NHIF / Private Medical Insurance</p>
-                  <p className="text-[11px] text-purple-700">Insurance co-pay collected. Claim approved.</p>
+                <div className="p-3.5 bg-purple-50/80 rounded-xl border border-purple-200 space-y-3">
+                  <div className="flex items-center gap-2 pb-2 border-b border-purple-200 text-purple-950 font-bold text-xs">
+                    <FileCheck className="w-4 h-4 text-purple-700" />
+                    <span>Insurance / Medical Cover Claim</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-purple-900 mb-0.5">
+                      Insurance Provider / Underwriter
+                    </label>
+                    <select
+                      value={insuranceProvider}
+                      onChange={(e) => setInsuranceProvider(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs font-semibold border border-purple-300 rounded-lg bg-white text-purple-950"
+                    >
+                      <option value="Social Health Authority (SHA / NHIF)">Social Health Authority (SHA / NHIF)</option>
+                      <option value="Jubilee Health Insurance">Jubilee Health Insurance</option>
+                      <option value="AAR Insurance Kenya">AAR Insurance Kenya</option>
+                      <option value="Britam Medishield">Britam Medishield</option>
+                      <option value="CIC General Insurance">CIC General Insurance</option>
+                      <option value="UAP Old Mutual Health">UAP Old Mutual Health</option>
+                      <option value="First Assurance Medical">First Assurance Medical</option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-semibold text-purple-900 mb-0.5">
+                        Member / Policy Number *
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. SHA-881920"
+                        value={insurancePolicyNumber}
+                        onChange={(e) => setInsurancePolicyNumber(e.target.value.toUpperCase())}
+                        className="w-full px-2.5 py-1.5 text-xs font-bold border border-purple-300 rounded-lg font-mono uppercase bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-center mb-0.5">
+                        <label className="text-[10px] font-semibold text-purple-900">Pre-Auth / Claim Code *</label>
+                        <button
+                          type="button"
+                          onClick={handleGenerateInsuranceClaimCode}
+                          className="text-[9px] text-purple-700 font-bold hover:underline"
+                        >
+                          Generate
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="CLM-827361"
+                        value={insuranceAuthCode}
+                        onChange={(e) => setInsuranceAuthCode(e.target.value.toUpperCase())}
+                        className="w-full px-2.5 py-1.5 text-xs font-bold border border-purple-300 rounded-lg font-mono uppercase bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="p-2 rounded-lg bg-purple-100/70 border border-purple-300 text-[11px] text-purple-900 flex justify-between items-center">
+                    <span>Direct Insurance Billing Approved</span>
+                    <span className="font-bold text-purple-800">Claim Total: {formatKSh(total)}</span>
+                  </div>
                 </div>
               )}
 
@@ -1079,7 +1554,8 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsCheckoutOpen(false)}
-                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-semibold disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -1087,9 +1563,14 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
                   type="button"
                   id="confirm-checkout-sale-btn"
                   onClick={handleConfirmSale}
-                  className="px-6 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold shadow-md transition active:scale-95"
+                  disabled={isSubmitting}
+                  className="px-6 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold shadow-md transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
-                  Complete Sale & Print
+                  {isSubmitting ? (
+                    <span>Processing Sale...</span>
+                  ) : (
+                    <span>Complete Sale & Print</span>
+                  )}
                 </button>
               </div>
             </div>

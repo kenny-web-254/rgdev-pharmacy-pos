@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   Check,
+  Database,
   FileText,
   Lock,
   Printer,
@@ -11,20 +12,20 @@ import {
 } from 'lucide-react';
 import { ReceiptSettings, UserRole } from '../types';
 import { INITIAL_RECEIPT_SETTINGS } from '../data/mockData';
+import { SupabaseDatabaseSettings } from './SupabaseDatabaseSettings';
 
 interface ReceiptSettingsViewProps {
   settings: ReceiptSettings;
   onSaveSettings: (settings: ReceiptSettings) => void;
   userRole: UserRole;
-  onRequestRoleSwitch: () => void;
 }
 
 export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
   settings,
   onSaveSettings,
   userRole,
-  onRequestRoleSwitch,
 }) => {
+  const [subTab, setSubTab] = useState<'receipt' | 'database'>('receipt');
   const [formData, setFormData] = useState<ReceiptSettings>({ ...settings });
   const [savedSuccess, setSavedSuccess] = useState(false);
 
@@ -71,20 +72,14 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {!isAdmin && (
-            <div className="flex items-center gap-2 bg-amber-50 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-xl text-xs font-semibold">
-              <Lock className="w-4 h-4 text-amber-600" />
-              <span>Cashier View-Only</span>
-              <button
-                onClick={onRequestRoleSwitch}
-                className="underline hover:text-amber-950 font-bold ml-1"
-              >
-                Switch to Admin
-              </button>
+          {subTab === 'receipt' && !isAdmin && (
+            <div className="flex items-center gap-2 bg-slate-100 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold">
+              <Lock className="w-4 h-4 text-slate-500" />
+              <span>Staff View-Only (Admin permissions required to modify)</span>
             </div>
           )}
 
-          {isAdmin && (
+          {subTab === 'receipt' && isAdmin && (
             <>
               <button
                 type="button"
@@ -108,7 +103,39 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {/* Sub-Tab Switcher */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <button
+          type="button"
+          onClick={() => setSubTab('receipt')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+            subTab === 'receipt'
+              ? 'bg-teal-700 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Printer className="w-4 h-4" />
+          <span>Receipt Customization</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setSubTab('database')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+            subTab === 'database'
+              ? 'bg-teal-700 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Database className="w-4 h-4" />
+          <span>Supabase Cloud Database & Schema</span>
+        </button>
+      </div>
+
+      {subTab === 'database' ? (
+        <SupabaseDatabaseSettings isAdmin={isAdmin} />
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left column: Form configuration */}
         <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-6">
           <form onSubmit={handleSave} className="space-y-6">
@@ -554,7 +581,8 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
             </div>
           </div>
         </div>
-      </div>
+        </div>
+      )}
     </div>
   );
 };

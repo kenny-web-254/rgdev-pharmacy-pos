@@ -29,7 +29,7 @@ interface NavbarProps {
   activeTab: AppNavTab;
   onSelectTab: (tab: AppNavTab) => void;
   currentUser: User;
-  onOpenUserSwitch: () => void;
+  onLogout: () => void;
   lowStockCount: number;
   isOnline: boolean;
   isSimulatedOffline: boolean;
@@ -45,7 +45,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   onSelectTab,
   currentUser,
-  onOpenUserSwitch,
+  onLogout,
   lowStockCount,
   isOnline,
   isSimulatedOffline,
@@ -57,8 +57,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   todayRevenueFormatted,
 }) => {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
-  const isAdmin = currentUser.role === 'admin';
-  const normalizedRole = currentUser.role === 'cashier' ? 'staff' : currentUser.role;
+  const isAdmin = currentUser?.role === 'admin';
+  const normalizedRole = currentUser?.role === 'cashier' ? 'staff' : (currentUser?.role || 'staff');
 
   const handleNavClick = (tab: AppNavTab) => {
     onSelectTab(tab);
@@ -182,13 +182,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             {isOnline ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
           </button>
 
-          {/* User profile avatar / switch button */}
+          {/* User profile avatar button (navigates to own profile) */}
           <button
-            onClick={onOpenUserSwitch}
+            onClick={() => onSelectTab('profile')}
             className={`w-9 h-9 rounded-xl flex items-center justify-center text-white font-bold text-xs shadow-xs transition active:scale-95 ${
               currentUser.avatarColor || (isAdmin ? 'bg-teal-700' : 'bg-emerald-600')
             }`}
-            title={`Logged in as ${currentUser.name} (${normalizedRole.toUpperCase()})`}
+            title={`Logged in as ${currentUser.name} (${normalizedRole.toUpperCase()}) - View Profile`}
           >
             {currentUser.name.charAt(0)}
           </button>
@@ -240,28 +240,39 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
 
             {/* Current User Card */}
-            <div className="p-4 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
+            <div className="p-4 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between gap-2">
+              <button
+                onClick={() => {
+                  setMobileDrawerOpen(false);
+                  onSelectTab('profile');
+                }}
+                className="flex items-center gap-2.5 text-left min-w-0 flex-1 hover:opacity-80 transition cursor-pointer"
+                title="View account profile"
+              >
                 <div
-                  className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-xs ${
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-xs shrink-0 ${
                     currentUser.avatarColor || (isAdmin ? 'bg-teal-700' : 'bg-emerald-600')
                   }`}
                 >
                   {currentUser.name.charAt(0)}
                 </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-900">{currentUser.name}</div>
-                  <div className="text-[10px] text-slate-500 font-mono">@{currentUser.username}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-bold text-slate-900 truncate">{currentUser.name}</div>
+                  <div className="text-[10px] text-slate-500 font-mono truncate">
+                    @{currentUser.username} • <span className="uppercase text-teal-700 font-bold">{normalizedRole}</span>
+                  </div>
                 </div>
-              </div>
+              </button>
               <button
                 onClick={() => {
                   setMobileDrawerOpen(false);
-                  onOpenUserSwitch();
+                  onLogout();
                 }}
-                className="px-2.5 py-1 text-[11px] font-bold text-teal-700 hover:bg-teal-50 border border-teal-200 rounded-lg transition"
+                className="px-2.5 py-1 text-[11px] font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg transition flex items-center gap-1 shrink-0 cursor-pointer"
+                title="Sign out of account"
               >
-                Switch
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
               </button>
             </div>
 
@@ -443,12 +454,14 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Footer: User Profile & Connectivity Switcher */}
         <div className="p-3 border-t border-slate-100 bg-slate-50 space-y-2">
-          {/* Active User Pill */}
-          <div
-            onClick={onOpenUserSwitch}
-            className="p-2.5 bg-white border border-slate-200 hover:border-teal-400 rounded-2xl flex items-center justify-between cursor-pointer transition shadow-2xs group"
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
+          {/* Active User Pill & Logout */}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => onSelectTab('profile')}
+              className="flex-1 p-2 bg-white border border-slate-200 hover:border-teal-400 rounded-2xl flex items-center gap-2.5 cursor-pointer transition shadow-2xs text-left group min-w-0"
+              title="View my account profile and credentials"
+            >
               <div
                 className={`w-8 h-8 rounded-xl flex items-center justify-center text-white font-bold text-xs shadow-xs shrink-0 ${
                   currentUser.avatarColor || (isAdmin ? 'bg-teal-700' : 'bg-emerald-600')
@@ -456,7 +469,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 {currentUser.name.charAt(0)}
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="text-xs font-bold text-slate-900 truncate group-hover:text-teal-700 transition">
                   {currentUser.name}
                 </div>
@@ -466,11 +479,17 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span>@{currentUser.username}</span>
                 </div>
               </div>
-            </div>
+            </button>
 
-            <span className="text-[10px] font-bold text-slate-400 group-hover:text-teal-700 transition">
-              Switch
-            </span>
+            <button
+              type="button"
+              onClick={onLogout}
+              className="p-2.5 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-700 border border-slate-200 hover:border-rose-300 rounded-2xl transition shadow-2xs flex items-center justify-center shrink-0 cursor-pointer"
+              title="Sign out of your account"
+              aria-label="Sign out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
 
           {/* Connectivity Status Button */}

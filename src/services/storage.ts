@@ -8,6 +8,7 @@ import {
   ReceiptSettings,
   SaleTransaction,
   User,
+  UserRole,
 } from '../types';
 import {
   DEMO_USERS,
@@ -195,7 +196,7 @@ export const storageService = {
   getMedications(): Medication[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.MEDICATIONS);
-      if (data) return JSON.parse(data);
+      if (data !== null) return JSON.parse(data);
     } catch (e) {
       console.error('Failed to load medications from storage', e);
     }
@@ -223,7 +224,7 @@ export const storageService = {
   getPrescriptions(): Prescription[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.PRESCRIPTIONS);
-      if (data) return JSON.parse(data);
+      if (data !== null) return JSON.parse(data);
     } catch (e) {
       console.error('Failed to load prescriptions from storage', e);
     }
@@ -243,9 +244,9 @@ export const storageService = {
   getTransactions(): SaleTransaction[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      if (data) {
+      if (data !== null) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.error('Failed to load transactions from storage', e);
@@ -622,7 +623,10 @@ export const storageService = {
   getAuditLogs(): AuditLog[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS);
-      if (data) return JSON.parse(data);
+      if (data !== null) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) return parsed;
+      }
     } catch (e) {
       console.error('Failed to load audit logs', e);
     }
@@ -741,6 +745,64 @@ export const storageService = {
     });
 
     return { success: true, user: updatedUser };
+  },
+
+  // Reset business data: deletes all stock, sales, prescriptions, and app activity logs while strictly preserving shop details (name, address, tax PIN, logo, receipt config) and user accounts
+  resetBusinessData(adminUser?: { id: string; name: string; role: string }): void {
+    // 1. Snapshot current shop profile & identity settings to ensure absolute retention
+    const preservedShopSettings = this.getReceiptSettings();
+    const preservedUsers = this.getUsers();
+    const preservedActiveUser = this.getActiveUser();
+
+    // 2. Wipe stock, sales, prescriptions, offline queue, active cart, and order tabs
+    this.saveMedications([]);
+    this.saveTransactions([]);
+    this.savePrescriptions([]);
+    this.saveOfflineQueue([]);
+    this.clearCart();
+    this.clearInventoryFilters();
+
+    const freshTabs: POSTab[] = [
+      {
+        id: 'tab-1',
+        name: 'Tab 1',
+        cart: [],
+        patientName: '',
+        isParked: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ];
+    this.savePOSTabs(freshTabs);
+    this.saveActivePOSTabId('tab-1');
+
+    try {
+      localStorage.removeItem(STORAGE_KEYS.REGISTER_STATE);
+    } catch (e) {
+      // ignore
+    }
+
+    // 3. Guarantee shop details & user accounts remain strictly preserved
+    this.saveReceiptSettings(preservedShopSettings);
+    if (preservedUsers && preservedUsers.length > 0) {
+      this.saveUsers(preservedUsers);
+    }
+    if (preservedActiveUser) {
+      this.saveActiveUser(preservedActiveUser);
+    }
+
+    // 4. Initialize clean audit log recording the factory reset action
+    const resetLog: AuditLog = {
+      id: 'log-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      userId: adminUser?.id || 'admin',
+      userName: adminUser?.name || 'Administrator',
+      userRole: (adminUser?.role as UserRole) || 'admin',
+      action: 'SYSTEM_RESET',
+      details: `System business reset executed by ${adminUser?.name || 'Administrator'}. All stock inventory, sales history, prescriptions, and historical activity logs wiped. Shop profile for "${preservedShopSettings.pharmacyName}" maintained.`,
+      category: 'SETTINGS',
+    };
+    this.saveAuditLogs([resetLog]);
   },
 
   // Reset demo data

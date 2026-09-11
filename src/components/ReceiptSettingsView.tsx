@@ -1,18 +1,25 @@
 import React, { useRef, useState } from 'react';
 import {
   AlertCircle,
+  AlertTriangle,
   Check,
+  CheckCircle2,
   Database,
   FileText,
   Image as ImageIcon,
+  Info,
   Lock,
   Printer,
   RotateCcw,
   Save,
+  ShieldAlert,
+  ShieldCheck,
   Sliders,
   Sparkles,
+  Store,
   Trash2,
   UploadCloud,
+  X,
 } from 'lucide-react';
 import { ReceiptSettings, UserRole } from '../types';
 import { INITIAL_RECEIPT_SETTINGS } from '../data/mockData';
@@ -85,18 +92,31 @@ interface ReceiptSettingsViewProps {
   settings: ReceiptSettings;
   onSaveSettings: (settings: ReceiptSettings) => void;
   userRole: UserRole;
+  onResetSystemData?: () => void;
+  medicationCount?: number;
+  transactionCount?: number;
+  prescriptionCount?: number;
+  auditLogCount?: number;
 }
 
 export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
   settings,
   onSaveSettings,
   userRole,
+  onResetSystemData,
+  medicationCount = 0,
+  transactionCount = 0,
+  prescriptionCount = 0,
+  auditLogCount = 0,
 }) => {
-  const [subTab, setSubTab] = useState<'receipt' | 'database'>('receipt');
+  const [subTab, setSubTab] = useState<'receipt' | 'database' | 'reset'>('receipt');
   const [formData, setFormData] = useState<ReceiptSettings>({ ...settings });
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [resetConfirmInput, setResetConfirmInput] = useState('');
+  const [resetSuccessNotice, setResetSuccessNotice] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isAdmin = userRole === 'admin';
@@ -149,8 +169,42 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
     window.print();
   };
 
+  const handleExecuteSystemReset = () => {
+    if (!isAdmin || !onResetSystemData) return;
+    if (resetConfirmInput.trim().toUpperCase() !== 'RESET') return;
+    onResetSystemData();
+    setIsResetModalOpen(false);
+    setResetConfirmInput('');
+    setResetSuccessNotice(true);
+    setTimeout(() => setResetSuccessNotice(false), 6000);
+  };
+
   return (
     <div className="space-y-6">
+      {/* Reset Success Notice */}
+      {resetSuccessNotice && (
+        <div className="bg-emerald-900 border border-emerald-700 text-white px-5 py-4 rounded-2xl shadow-md flex items-center justify-between gap-3 animate-fadeIn">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-emerald-800 text-emerald-300 flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold">System Successfully Reset</h4>
+              <p className="text-xs text-emerald-200">
+                All inventory stock, sales transactions, prescriptions, and app activity logs have been wiped. Shop profile for &ldquo;{formData.pharmacyName}&rdquo; has been preserved.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setResetSuccessNotice(false)}
+            className="text-emerald-300 hover:text-white p-1 rounded-lg transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Top Banner / Heading */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
         <div className="flex items-center gap-3">
@@ -158,47 +212,66 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
             <Sliders className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-slate-900">Receipt Customization & Thermal Printer Settings</h1>
+            <h1 className="text-lg font-bold text-slate-900">Admin Settings & Receipt Customization</h1>
             <p className="text-xs text-slate-500">
-              Customize pharmacy identity, legal disclaimers, layout, and paper width for thermal receipts
+              Configure pharmacy identity, thermal receipts, cloud database, and system-wide maintenance
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {subTab === 'receipt' && !isAdmin && (
+        <div className="flex flex-wrap items-center gap-2">
+          {!isAdmin && (
             <div className="flex items-center gap-2 bg-slate-100 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-semibold">
               <Lock className="w-4 h-4 text-slate-500" />
               <span>Staff View-Only (Admin permissions required to modify)</span>
             </div>
           )}
 
-          {subTab === 'receipt' && isAdmin && (
+          {isAdmin && (
             <>
+              {/* SYSTEM RESET BUTTON (ADMIN) */}
               <button
                 type="button"
-                onClick={handleReset}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold transition"
+                id="top-system-reset-btn"
+                onClick={() => {
+                  setResetConfirmInput('');
+                  setIsResetModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-300 text-rose-700 bg-rose-50 hover:bg-rose-100 text-xs font-bold transition shadow-2xs cursor-pointer active:scale-95"
+                title="Wipe stock, sales, and app activity while keeping shop details"
               >
-                <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
-                <span>Reset Defaults</span>
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>Reset System Data</span>
               </button>
-              <button
-                type="button"
-                id="save-receipt-settings-btn"
-                onClick={handleSave}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold shadow-xs transition active:scale-95"
-              >
-                {savedSuccess ? <Check className="w-4 h-4 text-white" /> : <Save className="w-4 h-4" />}
-                <span>{savedSuccess ? 'Settings Saved!' : 'Save Changes'}</span>
-              </button>
+
+              {subTab === 'receipt' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleReset}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Reset Defaults</span>
+                  </button>
+                  <button
+                    type="button"
+                    id="save-receipt-settings-btn"
+                    onClick={handleSave}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold shadow-xs transition active:scale-95 cursor-pointer"
+                  >
+                    {savedSuccess ? <Check className="w-4 h-4 text-white" /> : <Save className="w-4 h-4" />}
+                    <span>{savedSuccess ? 'Settings Saved!' : 'Save Changes'}</span>
+                  </button>
+                </>
+              )}
             </>
           )}
         </div>
       </div>
 
       {/* Sub-Tab Switcher */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2">
         <button
           type="button"
           onClick={() => setSubTab('receipt')}
@@ -224,10 +297,251 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
           <Database className="w-4 h-4" />
           <span>Supabase Cloud Database & Schema</span>
         </button>
+
+        <button
+          type="button"
+          id="system-reset-tab-btn"
+          onClick={() => setSubTab('reset')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+            subTab === 'reset'
+              ? 'bg-rose-700 text-white shadow-xs'
+              : 'text-rose-700 hover:bg-rose-50 border border-rose-200'
+          }`}
+        >
+          <AlertTriangle className="w-4 h-4" />
+          <span>System Data Reset</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold uppercase ${
+            subTab === 'reset' ? 'bg-rose-800 text-rose-100' : 'bg-rose-100 text-rose-700'
+          }`}>Admin</span>
+        </button>
       </div>
 
       {subTab === 'database' ? (
         <SupabaseDatabaseSettings isAdmin={isAdmin} />
+      ) : subTab === 'reset' ? (
+        <div className="space-y-6">
+          {/* Main Hero Warning / Overview */}
+          <div className="bg-rose-50 border-2 border-rose-300 rounded-3xl p-6 sm:p-8 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white flex items-center justify-center shadow-sm shrink-0">
+                  <ShieldAlert className="w-7 h-7" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-extrabold text-rose-950">Factory System Data Reset</h2>
+                    <span className="bg-rose-200 text-rose-900 text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full">
+                      Admin Only
+                    </span>
+                  </div>
+                  <p className="text-sm text-rose-800">
+                    Purge operational inventory, sales transactions, prescriptions, and app activity while safely preserving your pharmacy shop profile, license, and user credentials.
+                  </p>
+                </div>
+              </div>
+
+              {isAdmin && (
+                <button
+                  type="button"
+                  id="open-reset-modal-hero-btn"
+                  onClick={() => {
+                    setResetConfirmInput('');
+                    setIsResetModalOpen(true);
+                  }}
+                  className="flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-rose-700 hover:bg-rose-800 text-white font-bold text-sm shadow-md transition active:scale-95 cursor-pointer whitespace-nowrap"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Start System Reset</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Side-by-side comparison: What gets deleted vs What is preserved */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Red Card: What is DELETED */}
+            <div className="bg-white rounded-2xl border-2 border-rose-200 p-6 space-y-4 shadow-xs">
+              <div className="flex items-center justify-between pb-3 border-b border-rose-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center">
+                    <Trash2 className="w-4 h-4" />
+                  </div>
+                  <h3 className="font-extrabold text-slate-900 text-sm">Data to be Deleted</h3>
+                </div>
+                <span className="text-xs font-bold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200">
+                  Permanent Wipe
+                </span>
+              </div>
+
+              <div className="space-y-3 text-xs">
+                <div className="flex items-start justify-between p-3 rounded-xl bg-rose-50/60 border border-rose-100">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-slate-900">Stock Inventory</div>
+                    <div className="text-slate-600 text-[11px]">All medication stock, batch lots, and inventory levels</div>
+                  </div>
+                  <span className="font-extrabold text-rose-700 bg-white px-2 py-1 rounded-md shadow-2xs">
+                    {medicationCount} items
+                  </span>
+                </div>
+
+                <div className="flex items-start justify-between p-3 rounded-xl bg-rose-50/60 border border-rose-100">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-slate-900">Sales Transactions & Receipts</div>
+                    <div className="text-slate-600 text-[11px]">All sales history, revenue numbers, and customer receipts</div>
+                  </div>
+                  <span className="font-extrabold text-rose-700 bg-white px-2 py-1 rounded-md shadow-2xs">
+                    {transactionCount} sales
+                  </span>
+                </div>
+
+                <div className="flex items-start justify-between p-3 rounded-xl bg-rose-50/60 border border-rose-100">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-slate-900">Prescriptions</div>
+                    <div className="text-slate-600 text-[11px]">All dispensary prescriptions and patient orders</div>
+                  </div>
+                  <span className="font-extrabold text-rose-700 bg-white px-2 py-1 rounded-md shadow-2xs">
+                    {prescriptionCount} Rx
+                  </span>
+                </div>
+
+                <div className="flex items-start justify-between p-3 rounded-xl bg-rose-50/60 border border-rose-100">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-slate-900">App Activity & Audit Logs</div>
+                    <div className="text-slate-600 text-[11px]">Past activity logs, stock adjustment logs & audit trail</div>
+                  </div>
+                  <span className="font-extrabold text-rose-700 bg-white px-2 py-1 rounded-md shadow-2xs">
+                    {auditLogCount} logs
+                  </span>
+                </div>
+
+                <div className="flex items-start justify-between p-3 rounded-xl bg-rose-50/60 border border-rose-100">
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-slate-900">Active / Parked POS Carts</div>
+                    <div className="text-slate-600 text-[11px]">Multi-customer checkout tabs and pending cart items</div>
+                  </div>
+                  <span className="font-extrabold text-rose-700 bg-white px-2 py-1 rounded-md shadow-2xs">
+                    Cleared
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Green Card: What is PRESERVED */}
+            <div className="bg-white rounded-2xl border-2 border-emerald-200 p-6 space-y-4 shadow-xs">
+              <div className="flex items-center justify-between pb-3 border-b border-emerald-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                    <ShieldCheck className="w-4 h-4" />
+                  </div>
+                  <h3 className="font-extrabold text-slate-900 text-sm">Shop Details Kept Intact</h3>
+                </div>
+                <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+                  100% Retained
+                </span>
+              </div>
+
+              <div className="space-y-2.5 text-xs">
+                <div className="p-3 rounded-xl bg-emerald-50/50 border border-emerald-100 flex items-start gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-slate-900">Pharmacy / Shop Name:</span>
+                    <p className="text-emerald-950 font-semibold">{formData.pharmacyName}</p>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-emerald-50/50 border border-emerald-100 flex items-start gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-slate-900">Slogan / Tagline:</span>
+                    <p className="text-slate-700">{formData.tagline || 'Licensed Chemists & Medical Suppliers'}</p>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-emerald-50/50 border border-emerald-100 flex items-start gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-slate-900">Physical Address & Contact Info:</span>
+                    <p className="text-slate-700">
+                      {formData.addressLine1} {formData.addressLine2 ? `, ${formData.addressLine2}` : ''} | Tel: {formData.phone}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-emerald-50/50 border border-emerald-100 flex items-start gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-slate-900">Regulatory License & KRA Tax PIN:</span>
+                    <p className="text-slate-700 font-mono">
+                      License: {formData.licenseNumber} | Tax PIN: {formData.taxId} (VAT: {Math.round(formData.taxRate * 100)}%)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-emerald-50/50 border border-emerald-100 flex items-start gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-slate-900">Branding, Logo & Thermal Printer Setup:</span>
+                    <p className="text-slate-700">
+                      Paper width ({formData.paperWidth}), disclaimers, return policy, and logo image.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-emerald-50/50 border border-emerald-100 flex items-start gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-slate-900">User Accounts & Admin Session:</span>
+                    <p className="text-slate-700">
+                      Staff accounts and your active logged-in admin session remain active.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Interactive Safe Confirmation Box */}
+          {isAdmin ? (
+            <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-5 shadow-xs">
+              <div className="space-y-1">
+                <h3 className="text-base font-extrabold text-slate-900">Confirm System Data Wipe</h3>
+                <p className="text-xs text-slate-500">
+                  To prevent accidental loss of operational inventory and financial history, type <strong className="font-mono text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">RESET</strong> below to confirm.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                <input
+                  type="text"
+                  id="reset-confirmation-input"
+                  value={resetConfirmInput}
+                  onChange={(e) => setResetConfirmInput(e.target.value)}
+                  placeholder="Type RESET to confirm..."
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 text-sm font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-rose-500 max-w-xs"
+                />
+
+                <button
+                  type="button"
+                  id="execute-system-reset-btn"
+                  disabled={resetConfirmInput.trim().toUpperCase() !== 'RESET'}
+                  onClick={handleExecuteSystemReset}
+                  className={`flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm shadow-xs transition cursor-pointer active:scale-95 ${
+                    resetConfirmInput.trim().toUpperCase() === 'RESET'
+                      ? 'bg-rose-700 hover:bg-rose-800 text-white'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Wipe Stock, Sales & Activity (Keep Shop Details)</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4 bg-slate-100 rounded-2xl border border-slate-200 text-center text-xs text-slate-600 font-semibold">
+              System data reset is restricted to authorized Administrators only.
+            </div>
+          )}
+        </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left column: Form configuration */}
@@ -748,11 +1062,49 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
               </div>
             </div>
 
+            {/* Danger Zone: System Data Reset */}
+            <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-4 sm:p-5 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                    <AlertTriangle className="w-5 h-5 text-rose-600" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-extrabold text-rose-950 uppercase tracking-wider">
+                      Danger Zone: Factory Data Reset
+                    </h4>
+                    <p className="text-xs text-rose-800">
+                      Wipe stock inventory, sales transactions & app activity while preserving shop details
+                    </p>
+                  </div>
+                </div>
+
+                {isAdmin && (
+                  <button
+                    type="button"
+                    id="danger-zone-system-reset-btn"
+                    onClick={() => {
+                      setResetConfirmInput('');
+                      setIsResetModalOpen(true);
+                    }}
+                    className="flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold shadow-xs transition active:scale-95 cursor-pointer whitespace-nowrap"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Reset Stock & Sales</span>
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-600 leading-relaxed">
+                Clears all registered stock medications, sales transactions, customer tabs, and past activity logs.
+                Your shop identity (<strong className="text-slate-900 font-semibold">{formData.pharmacyName}</strong>), physical address, KRA PIN, license number, and logo are 100% retained.
+              </p>
+            </div>
+
             {isAdmin && (
               <div className="pt-2 flex justify-end">
                 <button
                   type="submit"
-                  className="flex items-center gap-2 px-6 py-2.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm rounded-xl shadow-sm transition active:scale-95"
+                  className="flex items-center gap-2 px-6 py-2.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm rounded-xl shadow-sm transition active:scale-95 cursor-pointer"
                 >
                   <Save className="w-4 h-4" />
                   Save Receipt Customization
@@ -843,13 +1195,13 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
                 <div className="space-y-0.5">
                   <div className="flex justify-between font-bold">
                     <span>Amoxicillin 500mg</span>
-                    <span>$18.50</span>
+                    <span>KSh 1,850.00</span>
                   </div>
                   {formData.showGenericName && (
                     <div className="text-[9px] text-slate-500 italic">Gen: Amoxicillin Trihydrate</div>
                   )}
                   <div className="flex justify-between text-[10px] text-slate-600">
-                    <span>1 x $18.50</span>
+                    <span>1 x KSh 1,850.00</span>
                     {formData.showPrescriptionDetails && (
                       <span className="bg-slate-100 font-bold px-1 rounded text-[9px]">Rx: RX-80219</span>
                     )}
@@ -859,13 +1211,13 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
                 <div className="space-y-0.5">
                   <div className="flex justify-between font-bold">
                     <span>Ibuprofen 400mg Forte</span>
-                    <span>$8.75</span>
+                    <span>KSh 875.00</span>
                   </div>
                   {formData.showGenericName && (
                     <div className="text-[9px] text-slate-500 italic">Gen: Ibuprofen</div>
                   )}
                   <div className="flex justify-between text-[10px] text-slate-600">
-                    <span>1 x $8.75</span>
+                    <span>1 x KSh 875.00</span>
                     <span className="text-[9px] text-slate-500">OTC Item</span>
                   </div>
                 </div>
@@ -875,17 +1227,17 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
               <div className="py-2 border-b border-dashed border-slate-400 space-y-1 text-[11px]">
                 <div className="flex justify-between">
                   <span>SUBTOTAL:</span>
-                  <span>$27.25</span>
+                  <span>KSh 2,725.00</span>
                 </div>
                 {formData.showTaxBreakdown && (
                   <div className="flex justify-between text-slate-600">
                     <span>TAX ({Math.round(formData.taxRate * 100)}%):</span>
-                    <span>${(27.25 * formData.taxRate).toFixed(2)}</span>
+                    <span>KSh {(2725 * formData.taxRate).toFixed(2)}</span>
                   </div>
                 )}
                 <div className="flex justify-between font-bold text-sm pt-1 border-t border-slate-300">
                   <span>TOTAL:</span>
-                  <span>${(27.25 * (1 + formData.taxRate)).toFixed(2)}</span>
+                  <span>KSh {(2725 * (1 + formData.taxRate)).toFixed(2)}</span>
                 </div>
               </div>
 
@@ -909,6 +1261,145 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
             </div>
           </div>
         </div>
+        </div>
+      )}
+
+      {/* SYSTEM RESET CONFIRMATION MODAL DIALOG */}
+      {isResetModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-xl rounded-3xl shadow-2xl border border-rose-200 overflow-hidden animate-fadeIn">
+            {/* Modal Header */}
+            <div className="bg-rose-50 border-b border-rose-100 p-6 flex items-start justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-black text-rose-950">Factory System Data Reset</h3>
+                    <span className="bg-rose-200 text-rose-800 text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full">
+                      Admin
+                    </span>
+                  </div>
+                  <p className="text-xs text-rose-800 mt-0.5">
+                    Delete stock, sales & app activity while retaining shop details
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsResetModalOpen(false)}
+                className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-white/80 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 space-y-5">
+              <div className="p-3.5 bg-rose-50/70 rounded-2xl border border-rose-200 text-xs text-rose-900 leading-relaxed">
+                <strong>Attention:</strong> This will permanently delete all inventory medications, recorded sales receipts, customer carts, and operational activity logs.
+              </div>
+
+              {/* Data Summary Grid */}
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                {/* Wiped list */}
+                <div className="p-3.5 bg-rose-50/40 rounded-2xl border border-rose-100 space-y-1.5">
+                  <span className="text-[10px] font-black text-rose-700 uppercase tracking-wider block">
+                    Will be deleted:
+                  </span>
+                  <ul className="space-y-1 text-slate-700 text-[11px]">
+                    <li className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                      <span>Stock inventory ({medicationCount} meds)</span>
+                    </li>
+                    <li className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                      <span>Sales & receipts ({transactionCount} sales)</span>
+                    </li>
+                    <li className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                      <span>Prescriptions ({prescriptionCount} records)</span>
+                    </li>
+                    <li className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                      <span>Activity logs ({auditLogCount} logs)</span>
+                    </li>
+                  </ul>
+                </div>
+
+                {/* Retained list */}
+                <div className="p-3.5 bg-emerald-50/50 rounded-2xl border border-emerald-100 space-y-1.5">
+                  <span className="text-[10px] font-black text-emerald-700 uppercase tracking-wider block">
+                    Will be kept:
+                  </span>
+                  <ul className="space-y-1 text-slate-700 text-[11px]">
+                    <li className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span className="truncate"><strong>{formData.pharmacyName}</strong></span>
+                    </li>
+                    <li className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Address & phone</span>
+                    </li>
+                    <li className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>KRA PIN: {formData.taxId}</span>
+                    </li>
+                    <li className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Printer settings & logo</span>
+                    </li>
+                    <li className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>Admin user accounts</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Confirmation Input Field */}
+              <div className="space-y-2 pt-1">
+                <label className="block text-xs font-bold text-slate-800">
+                  Type <span className="font-mono text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">RESET</span> to confirm:
+                </label>
+                <input
+                  type="text"
+                  id="modal-reset-input"
+                  value={resetConfirmInput}
+                  onChange={(e) => setResetConfirmInput(e.target.value)}
+                  placeholder="Type RESET"
+                  className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-sm font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-col-reverse sm:flex-row sm:items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setIsResetModalOpen(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 font-semibold text-xs transition cursor-pointer"
+              >
+                Cancel / Keep Data
+              </button>
+              <button
+                type="button"
+                id="modal-confirm-reset-btn"
+                disabled={resetConfirmInput.trim().toUpperCase() !== 'RESET'}
+                onClick={handleExecuteSystemReset}
+                className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer active:scale-95 ${
+                  resetConfirmInput.trim().toUpperCase() === 'RESET'
+                    ? 'bg-rose-700 hover:bg-rose-800 text-white'
+                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Wipe Stock & Sales (Keep Shop)</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

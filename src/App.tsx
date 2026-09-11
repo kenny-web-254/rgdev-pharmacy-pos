@@ -672,6 +672,49 @@ export default function App() {
     setReceiptModalTx(transaction);
   };
 
+  // System Data Reset Handler (Admin Only) - wipes stock, sales & activity while strictly preserving shop details & accounts
+  const handleResetSystemData = () => {
+    if (currentUser.role !== 'admin') {
+      showToast('Unauthorized: Only administrators can reset system data.', 'error');
+      return;
+    }
+
+    storageService.resetBusinessData({
+      id: currentUser.id,
+      name: currentUser.name,
+      role: currentUser.role,
+    });
+
+    // Refresh state in App.tsx
+    setMedications([]);
+    setTransactions([]);
+    setOfflineQueue([]);
+    setPrescriptions([]);
+    setAuditLogs(storageService.getAuditLogs());
+
+    // Reset POS tabs
+    const freshTab: POSTab = {
+      id: 'tab-1',
+      name: 'Tab 1',
+      cart: [],
+      patientName: '',
+      isParked: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    setPosTabs([freshTab]);
+    setActivePOSTabId('tab-1');
+
+    // Keep shop details intact
+    const preservedSettings = storageService.getReceiptSettings();
+    setReceiptSettings(preservedSettings);
+
+    showToast(
+      `System reset complete: All stock, sales, and past logs deleted. Shop profile for "${preservedSettings.pharmacyName}" preserved.`,
+      'success'
+    );
+  };
+
   // Authentication & Session
   const handleLogin = (user: User) => {
     setCurrentUser(user);
@@ -858,7 +901,7 @@ export default function App() {
             />
           )}
 
-          {/* ADMIN-ONLY MODULE: Receipt Settings */}
+          {/* ADMIN-ONLY MODULE: Admin Settings */}
           {activeTab === 'settings' && currentUser.role === 'admin' && (
             <ReceiptSettingsView
               settings={receiptSettings}
@@ -877,6 +920,11 @@ export default function App() {
                 showToast('Receipt customization settings updated & saved!', 'success');
               }}
               userRole={currentUser.role}
+              onResetSystemData={handleResetSystemData}
+              medicationCount={medications.length}
+              transactionCount={transactions.length}
+              prescriptionCount={prescriptions.length}
+              auditLogCount={auditLogs.length}
             />
           )}
 

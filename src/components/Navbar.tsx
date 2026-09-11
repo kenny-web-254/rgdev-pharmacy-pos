@@ -127,8 +127,8 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
     {
       id: 'settings',
-      label: 'Receipt Settings',
-      sublabel: 'Tax PIN & thermal layout',
+      label: 'Admin Settings',
+      sublabel: 'Shop profile, printer & reset',
       icon: <Sliders className="w-5 h-5 shrink-0" />,
       adminOnly: true,
     },

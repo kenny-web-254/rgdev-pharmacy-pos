@@ -43,6 +43,7 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [selectedRxForLabel, setSelectedRxForLabel] = useState<Prescription | null>(null);
   const [isNewRxModalOpen, setIsNewRxModalOpen] = useState(false);
+  const [newRxError, setNewRxError] = useState<string | null>(null);
 
   // New Rx form state
   const [newRx, setNewRx] = useState<Partial<Prescription>>({
@@ -91,22 +92,60 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
 
   const handleCreateNewRx = (e: React.FormEvent) => {
     e.preventDefault();
+    setNewRxError(null);
+
+    const rxNum = newRx.rxNumber?.trim();
+    const patientName = newRx.patientName?.trim();
+    const doctorName = newRx.doctorName?.trim();
+    const doctorLicense = newRx.doctorLicense?.trim();
+    const quantity = Number(newRx.quantityPrescribed);
+
+    if (!rxNum) {
+      setNewRxError('Prescription Rx Number is required.');
+      return;
+    }
+
+    // Check duplicate prescription number
+    if (prescriptions.some((p) => p.rxNumber.toLowerCase() === rxNum.toLowerCase())) {
+      setNewRxError(`Prescription with Rx Number "${rxNum}" already exists.`);
+      return;
+    }
+
+    if (!patientName) {
+      setNewRxError('Patient full name is required.');
+      return;
+    }
+
+    if (!doctorName) {
+      setNewRxError('Prescribing physician name is required.');
+      return;
+    }
+
+    if (!doctorLicense) {
+      setNewRxError('Prescriber medical license number is required.');
+      return;
+    }
+
+    if (isNaN(quantity) || quantity <= 0) {
+      setNewRxError('Prescribed quantity must be a positive number.');
+      return;
+    }
+
     const rxId = 'rx-' + Date.now();
-    const rxNum = newRx.rxNumber || 'RX-' + Math.floor(10000 + Math.random() * 90000);
     const fullRx: Prescription = {
       id: rxId,
       rxNumber: rxNum,
       barcode: rxNum,
-      patientName: newRx.patientName || 'Anonymous Patient',
+      patientName,
       patientDOB: newRx.patientDOB || '1990-01-01',
       patientPhone: newRx.patientPhone || '(555) 000-0000',
-      doctorName: newRx.doctorName || 'Dr. Physician, MD',
-      doctorLicense: newRx.doctorLicense || 'MED-00000',
+      doctorName,
+      doctorLicense,
       doctorClinic: newRx.doctorClinic || 'Community Clinic',
       medicationId: newRx.medicationId || medications[0]?.id || '',
       medicationName: newRx.medicationName || medications[0]?.name || '',
       dosageInstructions: newRx.dosageInstructions || 'As directed',
-      quantityPrescribed: Number(newRx.quantityPrescribed) || 30,
+      quantityPrescribed: quantity,
       quantityDispensedSoFar: 0,
       refillsAllowed: Number(newRx.refillsAllowed) || 1,
       refillsRemaining: Number(newRx.refillsAllowed) || 1,
@@ -114,10 +153,11 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
       expiryDate: newRx.expiryDate || '2027-09-08',
       status: 'Active',
       insuranceProvider: newRx.insuranceProvider || 'Standard Health',
-      insuranceCoPayRate: Number(newRx.insuranceCoPayRate) || 0.20,
+      insuranceCoPayRate: Number(newRx.insuranceCoPayRate) || 0.2,
     };
     onAddNewPrescription(fullRx);
     setIsNewRxModalOpen(false);
+    setNewRxError(null);
   };
 
   return (
@@ -435,6 +475,12 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {newRxError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
+                {newRxError}
+              </div>
+            )}
 
             <form onSubmit={handleCreateNewRx} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">

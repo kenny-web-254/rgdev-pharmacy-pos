@@ -19,7 +19,7 @@ interface LoginViewProps {
 
 export const LoginView: React.FC<LoginViewProps> = ({
   onLogin,
-  pharmacyName = 'AfyaCare Pharmacy & Wellness',
+  pharmacyName = 'RG Pharma-POS',
 }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');

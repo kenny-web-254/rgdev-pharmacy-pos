@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Medication, Prescription } from '../types';
 import { playErrorBeep, playScanSuccessBeep } from '../utils/audio';
+import { formatKSh } from '../utils/currency';
 
 interface BarcodeScannerModalProps {
   isOpen: boolean;
@@ -177,7 +178,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
     if (matchedMed) {
       playScanSuccessBeep();
-      setLastScannedResult(`Medication found: ${matchedMed.name} ($${matchedMed.price.toFixed(2)})`);
+      setLastScannedResult(`Medication found: ${matchedMed.name} (${formatKSh(matchedMed.price)})`);
       setScanStatusMessage({
         text: `Medication verified: ${matchedMed.name} (${matchedMed.stock} in stock)`,
         type: 'success',
@@ -358,7 +359,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                     <Pill className="w-4 h-4 text-emerald-600 group-hover:scale-110 transition" />
                     <div>
                       <div className="text-xs font-bold text-slate-800 font-mono">{med.barcode}</div>
-                      <div className="text-[11px] text-slate-500">{med.name} (${med.price.toFixed(2)})</div>
+                      <div className="text-[11px] text-slate-500">{med.name} ({formatKSh(med.price)})</div>
                     </div>
                   </div>
                   <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">

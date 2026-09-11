@@ -23,6 +23,7 @@ import {
   AuditLog,
   CartItem,
   Medication,
+  POSTab,
   Prescription,
   ReceiptSettings,
   SaleTransaction,
@@ -46,37 +47,159 @@ export default function App() {
   const [offlineQueue, setOfflineQueue] = useState<SaleTransaction[]>(() => storageService.getOfflineQueue());
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(() => storageService.getReceiptSettings());
 
-  // POS State with localStorage persistence and live medication data reconciliation
-  const [cart, setCart] = useState<CartItem[]>(() => {
-    const saved = storageService.getCart();
+  // POS Multi-Customer Order Tabs with localStorage persistence & inventory reconciliation
+  const [posTabs, setPosTabs] = useState<POSTab[]>(() => {
+    const savedTabs = storageService.getPOSTabs();
     const currentMeds = storageService.getMedications();
-    return saved
-      .filter((item) => currentMeds.some((m) => m.id === item.medication.id))
-      .map((item) => {
-        const liveMed = currentMeds.find((m) => m.id === item.medication.id)!;
-        const validQuantity = Math.min(item.quantity, Math.max(1, liveMed.stock));
-        return {
-          ...item,
-          medication: liveMed,
-          quantity: validQuantity,
-        };
-      });
+    return savedTabs.map((tab) => ({
+      ...tab,
+      cart: tab.cart
+        .filter((item) => currentMeds.some((m) => m.id === item.medication.id))
+        .map((item) => {
+          const liveMed = currentMeds.find((m) => m.id === item.medication.id)!;
+          const validQuantity = Math.min(item.quantity, Math.max(1, liveMed.stock));
+          return {
+            ...item,
+            medication: liveMed,
+            quantity: validQuantity,
+          };
+        }),
+    }));
   });
 
-  // Save cart to localStorage automatically on any cart change
+  const [activePOSTabId, setActivePOSTabId] = useState<string>(() => {
+    return storageService.getActivePOSTabId() || 'tab-1';
+  });
+
+  // Derived active tab
+  const activePOSTab = posTabs.find((t) => t.id === activePOSTabId) || posTabs[0] || {
+    id: 'tab-1',
+    name: 'Tab 1',
+    cart: [],
+    patientName: '',
+    isParked: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  // Sync tabs and backward-compatible single cart to storage
   useEffect(() => {
-    storageService.saveCart(cart);
-  }, [cart]);
+    storageService.savePOSTabs(posTabs);
+    storageService.saveActivePOSTabId(activePOSTab.id);
+    storageService.saveCart(activePOSTab.cart);
+    storageService.saveCartPatientName(activePOSTab.patientName || '');
+  }, [posTabs, activePOSTab]);
+
+  const handleSelectPOSTab = (tabId: string) => {
+    setActivePOSTabId(tabId);
+  };
+
+  const handleAddPOSTab = (customName?: string) => {
+    const newTabNumber = posTabs.length + 1;
+    const newTab: POSTab = {
+      id: `tab-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      name: customName || `Tab ${newTabNumber}`,
+      cart: [],
+      patientName: '',
+      isParked: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    setPosTabs((prev) => [...prev, newTab]);
+    setActivePOSTabId(newTab.id);
+    showToast(`Opened new order tab "${newTab.name}".`, 'info');
+  };
+
+  const handleClosePOSTab = (tabId: string) => {
+    const target = posTabs.find((t) => t.id === tabId);
+    if (!target) return;
+
+    if (target.cart.length > 0) {
+      const confirmClose = window.confirm(
+        `Tab "${target.name}" contains ${target.cart.length} item(s). Close and discard this tab's cart?`
+      );
+      if (!confirmClose) return;
+    }
+
+    if (posTabs.length <= 1) {
+      const freshTab: POSTab = {
+        id: `tab-${Date.now()}`,
+        name: 'Tab 1',
+        cart: [],
+        patientName: '',
+        isParked: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      setPosTabs([freshTab]);
+      setActivePOSTabId(freshTab.id);
+      showToast('Tab cleared and reset to Tab 1.', 'info');
+      return;
+    }
+
+    const remaining = posTabs.filter((t) => t.id !== tabId);
+    setPosTabs(remaining);
+
+    if (activePOSTabId === tabId) {
+      const currentIdx = posTabs.findIndex((t) => t.id === tabId);
+      const nextIdx = Math.max(0, currentIdx - 1);
+      setActivePOSTabId(remaining[nextIdx]?.id || remaining[0].id);
+    }
+    showToast(`Closed tab "${target.name}".`, 'info');
+  };
+
+  const handleRenamePOSTab = (tabId: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    setPosTabs((prev) =>
+      prev.map((t) => (t.id === tabId ? { ...t, name: trimmed, updatedAt: Date.now() } : t))
+    );
+  };
+
+  const handleToggleParkPOSTab = (tabId: string) => {
+    setPosTabs((prev) =>
+      prev.map((t) => {
+        if (t.id === tabId) {
+          const willPark = !t.isParked;
+          showToast(
+            willPark ? `Tab "${t.name}" put on hold / parked.` : `Tab "${t.name}" resumed.`,
+            'info'
+          );
+          return { ...t, isParked: willPark, updatedAt: Date.now() };
+        }
+        return t;
+      })
+    );
+  };
+
+  const handleUpdateActiveCart = (newCart: CartItem[]) => {
+    setPosTabs((prev) =>
+      prev.map((t) => (t.id === activePOSTab.id ? { ...t, cart: newCart, updatedAt: Date.now() } : t))
+    );
+  };
+
+  const handleUpdateActivePatientName = (patientName: string) => {
+    setPosTabs((prev) =>
+      prev.map((t) => {
+        if (t.id === activePOSTab.id) {
+          const isGeneric = /^Tab \d+$/i.test(t.name);
+          const newName = isGeneric && patientName.trim() ? `${t.name}: ${patientName.trim()}` : t.name;
+          return { ...t, patientName, name: newName, updatedAt: Date.now() };
+        }
+        return t;
+      })
+    );
+  };
 
   // Modals
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [receiptModalTx, setReceiptModalTx] = useState<SaleTransaction | null>(null);
-  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'warning' } | null>(null);
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'warning' | 'error' } | null>(null);
 
   // Network Connectivity Hook
   const { isOnline, isSimulatedOffline, toggleSimulatedOffline } = useOnlineStatus();
 
-  const showToast = (text: string, type: 'success' | 'info' | 'warning' = 'success') => {
+  const showToast = (text: string, type: 'success' | 'info' | 'warning' | 'error' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => {
       setToastMessage((prev) => (prev?.text === text ? null : prev));
@@ -136,13 +259,38 @@ export default function App() {
     }
   }, [isOnline]);
 
-  // Inventory Management Handlers with Authorization Enforcement
+  // Inventory Management Handlers with Authorization Enforcement & Pharmaceutical Compliance
   const handleUpdateMedication = (updated: Medication) => {
     if (!currentUser || currentUser.role !== 'admin') {
       showToast('Unauthorized: Only administrators can modify stock or pricing.', 'warning');
       return;
     }
-    const updatedList = medications.map((m) => (m.id === updated.id ? updated : m));
+
+    // Stricter Validation: Stock cannot fall below zero
+    if (typeof updated.stock !== 'number' || isNaN(updated.stock) || updated.stock < 0) {
+      showToast('Pharmaceutical Compliance Error: Stock levels cannot fall below zero.', 'error');
+      return;
+    }
+
+    // Stricter Validation: Batch information must be strictly associated
+    if (!updated.batchNumber || !updated.batchNumber.trim()) {
+      showToast('Pharmaceutical Compliance Error: Batch/Lot number is strictly required.', 'error');
+      return;
+    }
+
+    if (!updated.expiryDate || !updated.expiryDate.trim()) {
+      showToast('Pharmaceutical Compliance Error: Expiration date is strictly required.', 'error');
+      return;
+    }
+
+    const cleanUpdated: Medication = {
+      ...updated,
+      stock: Math.max(0, Math.floor(updated.stock)),
+      batchNumber: updated.batchNumber.trim(),
+      expiryDate: updated.expiryDate.trim(),
+    };
+
+    const updatedList = medications.map((m) => (m.id === cleanUpdated.id ? cleanUpdated : m));
     setMedications(updatedList);
     storageService.saveMedications(updatedList);
 
@@ -151,12 +299,12 @@ export default function App() {
       userName: currentUser.name,
       userRole: currentUser.role,
       action: 'INVENTORY_UPDATED',
-      details: `Updated item ${updated.name} (Stock: ${updated.stock}, Price: ${formatKSh(updated.price)})`,
+      details: `Updated item ${cleanUpdated.name} (Stock: ${cleanUpdated.stock}, Batch: ${cleanUpdated.batchNumber}, Expiry: ${cleanUpdated.expiryDate}, Price: ${formatKSh(cleanUpdated.price)})`,
       category: 'INVENTORY',
     });
     setAuditLogs(storageService.getAuditLogs());
 
-    showToast(`Updated medication details for ${updated.name}.`, 'success');
+    showToast(`Updated medication details for ${cleanUpdated.name}.`, 'success');
   };
 
   const handleAddMedication = (newItem: Medication) => {
@@ -164,7 +312,32 @@ export default function App() {
       showToast('Unauthorized: Only administrators can add products.', 'warning');
       return;
     }
-    const updatedList = [newItem, ...medications];
+
+    // Stricter Validation: Stock cannot fall below zero
+    if (typeof newItem.stock !== 'number' || isNaN(newItem.stock) || newItem.stock < 0) {
+      showToast('Pharmaceutical Compliance Error: Stock levels cannot fall below zero.', 'error');
+      return;
+    }
+
+    // Stricter Validation: Batch information is strictly mandatory
+    if (!newItem.batchNumber || !newItem.batchNumber.trim()) {
+      showToast('Pharmaceutical Compliance Error: Batch/Lot number is strictly required for registration.', 'error');
+      return;
+    }
+
+    if (!newItem.expiryDate || !newItem.expiryDate.trim()) {
+      showToast('Pharmaceutical Compliance Error: Expiration date is strictly required.', 'error');
+      return;
+    }
+
+    const cleanItem: Medication = {
+      ...newItem,
+      stock: Math.max(0, Math.floor(newItem.stock)),
+      batchNumber: newItem.batchNumber.trim(),
+      expiryDate: newItem.expiryDate.trim(),
+    };
+
+    const updatedList = [cleanItem, ...medications];
     setMedications(updatedList);
     storageService.saveMedications(updatedList);
 
@@ -173,12 +346,12 @@ export default function App() {
       userName: currentUser.name,
       userRole: currentUser.role,
       action: 'PRODUCT_ADDED',
-      details: `Added new product ${newItem.name} (${newItem.dosage}, Price: ${formatKSh(newItem.price)})`,
+      details: `Added new product ${cleanItem.name} (${cleanItem.dosage}, Batch: ${cleanItem.batchNumber}, Expiry: ${cleanItem.expiryDate}, Stock: ${cleanItem.stock}, Price: ${formatKSh(cleanItem.price)})`,
       category: 'INVENTORY',
     });
     setAuditLogs(storageService.getAuditLogs());
 
-    showToast(`Added ${newItem.name} to pharmacy inventory.`, 'success');
+    showToast(`Added ${cleanItem.name} to pharmacy inventory.`, 'success');
   };
 
   const handleDeleteMedication = (id: string) => {
@@ -190,7 +363,9 @@ export default function App() {
     const updatedList = medications.filter((m) => m.id !== id);
     setMedications(updatedList);
     storageService.saveMedications(updatedList);
-    setCart((prevCart) => prevCart.filter((i) => i.medication.id !== id));
+    setPosTabs((prev) =>
+      prev.map((t) => ({ ...t, cart: t.cart.filter((i) => i.medication.id !== id), updatedAt: Date.now() }))
+    );
 
     storageService.addAuditLog({
       userId: currentUser.id,
@@ -217,14 +392,44 @@ export default function App() {
       return;
     }
     const med = medications.find((m) => m.id === medicationId);
-    if (!med) return;
+    if (!med) {
+      showToast('Medication not found in inventory.', 'error');
+      return;
+    }
+
+    // Stricter Validation: Stock levels can never fall below zero
+    if (typeof newStock !== 'number' || isNaN(newStock) || newStock < 0) {
+      showToast(`Compliance Error: Stock levels cannot fall below zero (requested: ${newStock}). Transaction rejected.`, 'error');
+      return;
+    }
+
+    // Stricter Validation: Batch information must be strictly associated with every product adjustment
+    const batch = (newBatchNumber && newBatchNumber.trim()) || med.batchNumber?.trim();
+    if (!batch) {
+      showToast('Pharmaceutical Compliance Error: Every stock adjustment must be strictly associated with a valid batch/lot number.', 'error');
+      return;
+    }
+
+    const expiry = (newExpiryDate && newExpiryDate.trim()) || med.expiryDate?.trim();
+    if (!expiry) {
+      showToast('Pharmaceutical Compliance Error: Valid expiration date is required for stock adjustment batch association.', 'error');
+      return;
+    }
+
+    if (!reason || !reason.trim()) {
+      showToast('Pharmaceutical Compliance Error: Reason is mandatory for regulatory audit compliance.', 'error');
+      return;
+    }
+
     const prevStock = med.stock;
-    const diff = newStock - prevStock;
+    const cleanStock = Math.max(0, Math.floor(newStock));
+    const diff = cleanStock - prevStock;
+
     const updated: Medication = {
       ...med,
-      stock: Math.max(0, newStock),
-      batchNumber: newBatchNumber || med.batchNumber,
-      expiryDate: newExpiryDate || med.expiryDate,
+      stock: cleanStock,
+      batchNumber: batch,
+      expiryDate: expiry,
     };
     const updatedList = medications.map((m) => (m.id === medicationId ? updated : m));
     setMedications(updatedList);
@@ -235,11 +440,11 @@ export default function App() {
       userName: currentUser.name,
       userRole: currentUser.role,
       action: 'STOCK_ADJUSTMENT',
-      details: `Product: "${med.name}" | Previous: ${prevStock} | New: ${newStock} | Adjustment: ${diff >= 0 ? '+' : ''}${diff} | Reason: ${reason}`,
+      details: `Compliance Verified | Product: "${med.name}" | Batch: "${batch}" | Expiry: "${expiry}" | Previous Stock: ${prevStock} -> New Stock: ${cleanStock} (Adjustment: ${diff >= 0 ? '+' : ''}${diff}) | Reason: ${reason.trim()}`,
       category: 'INVENTORY',
     });
     setAuditLogs(storageService.getAuditLogs());
-    showToast(`Stock adjusted for ${med.name}: ${prevStock} -> ${newStock} (${diff >= 0 ? '+' : ''}${diff})`, 'success');
+    showToast(`Stock adjusted for ${med.name}: ${prevStock} -> ${cleanStock} (${diff >= 0 ? '+' : ''}${diff}) [Batch: ${batch}]`, 'success');
   };
 
   // Prescription Management Handlers
@@ -265,10 +470,12 @@ export default function App() {
     // Co-pay discount
     const itemDiscount = rx.insuranceCoPayRate !== undefined ? (1 - rx.insuranceCoPayRate) * 100 : 0;
 
-    const existingIndex = cart.findIndex((item) => item.medication.id === med.id && item.prescriptionId === rx.id);
+    const existingIndex = activePOSTab.cart.findIndex(
+      (item) => item.medication.id === med.id && item.prescriptionId === rx.id
+    );
 
     if (existingIndex > -1) {
-      showToast(`Prescription ${rx.rxNumber} already in active cart.`, 'info');
+      showToast(`Prescription ${rx.rxNumber} already in active tab "${activePOSTab.name}".`, 'info');
     } else {
       const newItem: CartItem = {
         medication: med,
@@ -278,9 +485,29 @@ export default function App() {
         patientName: rx.patientName,
         discountPercent: itemDiscount,
       };
-      setCart([...cart, newItem]);
+      const updatedCart = [...activePOSTab.cart, newItem];
+      setPosTabs((prev) =>
+        prev.map((t) => {
+          if (t.id === activePOSTab.id) {
+            const isGeneric = /^Tab \d+$/i.test(t.name);
+            const tabName = isGeneric ? `${t.name}: ${rx.patientName}` : t.name;
+            return {
+              ...t,
+              cart: updatedCart,
+              patientName: t.patientName || rx.patientName,
+              name: tabName,
+              isParked: false,
+              updatedAt: Date.now(),
+            };
+          }
+          return t;
+        })
+      );
       playScanSuccessBeep();
-      showToast(`Prescription ${rx.rxNumber} dispensed to cart (${itemDiscount.toFixed(0)}% insurance co-pay discount applied).`, 'success');
+      showToast(
+        `Prescription ${rx.rxNumber} dispensed to "${activePOSTab.name}" (${itemDiscount.toFixed(0)}% co-pay applied).`,
+        'success'
+      );
     }
 
     // Switch to POS checkout tab so cashier can tender immediately
@@ -309,21 +536,26 @@ export default function App() {
 
     if (matchedMed) {
       if (matchedMed.stock <= 0) {
-        alert(`Medication ${matchedMed.name} (${matchedMed.barcode}) is currently out of stock.`);
+        showToast(`Compliance Alert: Medication ${matchedMed.name} (${matchedMed.barcode}) is out of stock.`, 'warning');
         return;
       }
 
-      // Add to cart
-      const existingIdx = cart.findIndex((i) => i.medication.id === matchedMed.id);
+      // Add to active tab's cart with stock limit guard
+      const existingIdx = activePOSTab.cart.findIndex((i) => i.medication.id === matchedMed.id);
+      let updatedCart: CartItem[];
       if (existingIdx > -1) {
-        const updated = [...cart];
-        updated[existingIdx].quantity += 1;
-        setCart(updated);
+        if (activePOSTab.cart[existingIdx].quantity + 1 > matchedMed.stock) {
+          showToast(`Stock limit reached: Only ${matchedMed.stock} units available for ${matchedMed.name}.`, 'warning');
+          return;
+        }
+        updatedCart = [...activePOSTab.cart];
+        updatedCart[existingIdx].quantity += 1;
       } else {
-        setCart([...cart, { medication: matchedMed, quantity: 1 }]);
+        updatedCart = [...activePOSTab.cart, { medication: matchedMed, quantity: 1 }];
       }
+      handleUpdateActiveCart(updatedCart);
 
-      showToast(`Scanned & added: ${matchedMed.name} (${matchedMed.dosage})`, 'success');
+      showToast(`Scanned & added: ${matchedMed.name} to tab "${activePOSTab.name}"`, 'success');
       if (activeTab !== 'pos') {
         setActiveTab('pos');
       }
@@ -333,9 +565,28 @@ export default function App() {
     showToast(`Barcode "${code}" was not recognized in prescriptions or drug catalog.`, 'warning');
   };
 
-  // Sale Finalization
+  // Sale Finalization with strict pharmaceutical stock and batch validation
   const handleCompleteSale = (transaction: SaleTransaction) => {
-    // 1. Deduct stock from inventory
+    // 0. Pharmaceutical Compliance Validation: Ensure stock levels NEVER fall below zero during any transaction
+    for (const soldItem of transaction.items) {
+      const currentMed = medications.find((m) => m.id === soldItem.medicationId);
+      if (!currentMed) {
+        showToast(
+          `Pharmaceutical Compliance Error: Drug "${soldItem.name}" does not exist in inventory catalog. Sale aborted.`,
+          'error'
+        );
+        return;
+      }
+      if (currentMed.stock < soldItem.quantity) {
+        showToast(
+          `Pharmaceutical Compliance Error: Stock for "${currentMed.name}" cannot fall below zero! Shelf stock is ${currentMed.stock}, but ${soldItem.quantity} was requested. Sale rejected.`,
+          'error'
+        );
+        return;
+      }
+    }
+
+    // 1. Deduct stock from inventory strictly enforcing floor of 0
     const updatedMeds = medications.map((med) => {
       const soldItem = transaction.items.find((item) => item.medicationId === med.id);
       if (soldItem) {
@@ -371,8 +622,11 @@ export default function App() {
     setTransactions(newTxList);
     storageService.saveTransactions(newTxList);
 
-    // 4. Log Audit Trail
+    // 4. Log Audit Trail with strict Batch association
     if (currentUser) {
+      const batchDetails = transaction.items
+        .map((it) => `${it.name} (Qty: ${it.quantity}, Batch: ${it.batchNumber || 'Unspecified'})`)
+        .join('; ');
       storageService.addAuditLog({
         userId: currentUser.id,
         userName: currentUser.name,
@@ -380,22 +634,41 @@ export default function App() {
         action: 'SALE_COMPLETED',
         details: `Sale ${transaction.receiptNumber} recorded (${transaction.items.length} items, Total: ${formatKSh(
           transaction.total
-        )}, Method: ${transaction.paymentMethod})`,
+        )}, Method: ${transaction.paymentMethod}, Tab: "${activePOSTab.name}") | Batches Dispensed: [${batchDetails}]`,
         category: 'SALES',
       });
       setAuditLogs(storageService.getAuditLogs());
     }
 
-    // 5. Handle Offline Queueing if offline
+    // 5. Manage Tab Post-Sale
+    if (posTabs.length > 1) {
+      const remainingTabs = posTabs.filter((t) => t.id !== activePOSTab.id);
+      setPosTabs(remainingTabs);
+      setActivePOSTabId(remainingTabs[0].id);
+      showToast(`Sale completed on tab "${activePOSTab.name}". Switched to "${remainingTabs[0].name}".`, 'success');
+    } else {
+      const freshTab: POSTab = {
+        id: `tab-${Date.now()}`,
+        name: 'Tab 1',
+        cart: [],
+        patientName: '',
+        isParked: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      setPosTabs([freshTab]);
+      setActivePOSTabId(freshTab.id);
+      showToast(`Sale completed successfully! Receipt ${transaction.receiptNumber}`, 'success');
+    }
+
+    // 6. Handle Offline Queueing if offline
     if (transaction.isOffline) {
       storageService.addToOfflineQueue(transaction);
       setOfflineQueue(storageService.getOfflineQueue());
       showToast(`Sale recorded in offline queue (${transaction.receiptNumber}). It will auto-sync when online.`, 'info');
-    } else {
-      showToast(`Sale completed successfully! Receipt ${transaction.receiptNumber}`, 'success');
     }
 
-    // 6. Open thermal receipt modal
+    // 7. Open thermal receipt modal
     setReceiptModalTx(transaction);
   };
 
@@ -436,6 +709,8 @@ export default function App() {
               className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl shadow-xl text-xs font-semibold border ${
                 toastMessage.type === 'success'
                   ? 'bg-teal-900 text-white border-teal-700'
+                  : toastMessage.type === 'error'
+                  ? 'bg-red-900 text-white border-red-700'
                   : toastMessage.type === 'warning'
                   ? 'bg-amber-900 text-white border-amber-700'
                   : 'bg-slate-900 text-white border-slate-700'
@@ -443,6 +718,8 @@ export default function App() {
             >
               {toastMessage.type === 'success' ? (
                 <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
+              ) : toastMessage.type === 'error' ? (
+                <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
               ) : (
                 <Info className="w-4 h-4 text-amber-400 shrink-0" />
               )}
@@ -467,6 +744,8 @@ export default function App() {
             className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl shadow-xl text-xs font-semibold border ${
               toastMessage.type === 'success'
                 ? 'bg-teal-900 text-white border-teal-700'
+                : toastMessage.type === 'error'
+                ? 'bg-red-900 text-white border-red-700'
                 : toastMessage.type === 'warning'
                 ? 'bg-amber-900 text-white border-amber-700'
                 : 'bg-slate-900 text-white border-slate-700'
@@ -474,6 +753,8 @@ export default function App() {
           >
             {toastMessage.type === 'success' ? (
               <CheckCircle2 className="w-4 h-4 text-teal-400 shrink-0" />
+            ) : toastMessage.type === 'error' ? (
+              <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
             ) : (
               <Info className="w-4 h-4 text-amber-400 shrink-0" />
             )}
@@ -513,13 +794,22 @@ export default function App() {
             <POSTerminal
               medications={medications}
               prescriptions={prescriptions}
-              cart={cart}
-              onUpdateCart={setCart}
+              cart={activePOSTab.cart}
+              onUpdateCart={handleUpdateActiveCart}
               onCompleteSale={handleCompleteSale}
               onOpenScanner={() => setIsScannerOpen(true)}
               receiptSettings={receiptSettings}
               isOnline={isOnline}
               currentUser={currentUser}
+              tabs={posTabs}
+              activeTabId={activePOSTab.id}
+              onSelectTab={handleSelectPOSTab}
+              onAddTab={handleAddPOSTab}
+              onCloseTab={handleClosePOSTab}
+              onRenameTab={handleRenamePOSTab}
+              onToggleParkTab={handleToggleParkPOSTab}
+              activePatientName={activePOSTab.patientName || ''}
+              onUpdatePatientName={handleUpdateActivePatientName}
             />
           )}
 
@@ -542,15 +832,16 @@ export default function App() {
               onDeleteMedication={handleDeleteMedication}
               onAdjustStock={handleAdjustStock}
               onAddToCart={(med) => {
-                const existingIdx = cart.findIndex((i) => i.medication.id === med.id);
+                const existingIdx = activePOSTab.cart.findIndex((i) => i.medication.id === med.id);
+                let updated: CartItem[];
                 if (existingIdx > -1) {
-                  const updated = [...cart];
+                  updated = [...activePOSTab.cart];
                   updated[existingIdx].quantity += 1;
-                  setCart(updated);
                 } else {
-                  setCart([...cart, { medication: med, quantity: 1 }]);
+                  updated = [...activePOSTab.cart, { medication: med, quantity: 1 }];
                 }
-                showToast(`Added ${med.name} to POS cart.`, 'success');
+                handleUpdateActiveCart(updated);
+                showToast(`Added ${med.name} to POS tab "${activePOSTab.name}".`, 'success');
                 setActiveTab('pos');
               }}
               userRole={currentUser.role}

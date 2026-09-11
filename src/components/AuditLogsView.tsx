@@ -50,7 +50,7 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ logs, currentUser 
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `AfyaCare_AuditLogs_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `RG_Pharma_POS_AuditLogs_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

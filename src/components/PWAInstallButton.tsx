@@ -18,7 +18,7 @@ export const PWAInstallButton: React.FC = () => {
         id="pwa-install-btn"
         onClick={install}
         className="flex items-center gap-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white px-3 py-1.5 text-xs font-semibold shadow-sm transition-all active:scale-95"
-        title="Install Pharmacy POS app on your device"
+        title="Install RG Pharma-POS app on your device"
       >
         <Download className="w-3.5 h-3.5" />
         <span>Install PWA</span>

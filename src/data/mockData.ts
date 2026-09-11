@@ -113,17 +113,20 @@ export const INITIAL_AUDIT_LOGS: AuditLog[] = [
 ];
 
 export const INITIAL_RECEIPT_SETTINGS: ReceiptSettings = {
-  pharmacyName: 'AfyaCare Pharmacy & Chemists',
+  pharmacyName: 'RG Pharma-POS',
   tagline: 'Licensed Dispensing Chemist & Prescription Hub',
+  logoUrl: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120"><rect width="120" height="120" rx="24" fill="%230f766e"/><path d="M48 24h24v24h24v24H72v24H48V72H24V48h24z" fill="%23ffffff"/><circle cx="60" cy="60" r="8" fill="%230f766e"/></svg>',
+  showLogo: true,
+  logoHeight: 48,
   addressLine1: 'Hospital Road, Upper Hill, Suite 104',
   addressLine2: 'Nairobi, Kenya',
   phone: '+254 700 123 456 / +254 20 271 8900',
-  email: 'dispensary@afyacarepharmacy.co.ke',
+  email: 'dispensary@rgpharmapos.co.ke',
   licenseNumber: 'PPB Lic: PPB/RET/2026/0891 • KPA Reg: 4421',
   taxId: 'KRA PIN: P051982736Z',
   taxRate: 0.16, // 16% VAT
   paperWidth: '80mm',
-  headerMessage: 'Karibu AfyaCare! Thank you for trusting us with your health.',
+  headerMessage: 'Karibu RG Pharma-POS! Thank you for trusting us with your health.',
   footerMessage: 'Take all medications strictly as directed by your physician or pharmacist.',
   returnPolicy: 'Medicines cannot be returned once dispensed under Pharmacy and Poisons Board regulations.',
   emergencyPhone: 'Poisons & Emergency Helpline: +254 20 272 6300 / 999',

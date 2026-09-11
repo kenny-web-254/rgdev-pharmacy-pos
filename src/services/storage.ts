@@ -3,6 +3,7 @@ import {
   CartItem,
   InventoryFilters,
   Medication,
+  POSTab,
   Prescription,
   ReceiptSettings,
   SaleTransaction,
@@ -29,6 +30,8 @@ const STORAGE_KEYS = {
   REGISTER_STATE: 'pharmapos_register_state_v1',
   CART: 'pharmapos_cart_v1',
   CART_PATIENT_NAME: 'pharmapos_cart_patient_name_v1',
+  POS_TABS: 'pharmapos_tabs_v2',
+  ACTIVE_POS_TAB: 'pharmapos_active_tab_id_v2',
   LOGGED_OUT: 'pharmapos_is_logged_out_v2',
 };
 
@@ -130,6 +133,64 @@ export const storageService = {
       // ignore
     }
   },
+
+  // POS Multi-Order Tabs Persistence
+  getPOSTabs(): POSTab[] {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.POS_TABS);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load POS tabs from storage', e);
+    }
+
+    // Migration / fallback from legacy single cart
+    const existingCart = this.getCart();
+    const existingPatientName = this.getCartPatientName();
+    const defaultTab: POSTab = {
+      id: 'tab-1',
+      name: existingPatientName ? `Tab 1: ${existingPatientName}` : 'Tab 1',
+      cart: existingCart,
+      patientName: existingPatientName,
+      isParked: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    this.savePOSTabs([defaultTab]);
+    return [defaultTab];
+  },
+
+  savePOSTabs(tabs: POSTab[]): void {
+    try {
+      if (!tabs || tabs.length === 0) {
+        localStorage.removeItem(STORAGE_KEYS.POS_TABS);
+      } else {
+        localStorage.setItem(STORAGE_KEYS.POS_TABS, JSON.stringify(tabs));
+      }
+    } catch (e) {
+      console.error('Failed to save POS tabs', e);
+    }
+  },
+
+  getActivePOSTabId(): string {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.ACTIVE_POS_TAB) || 'tab-1';
+    } catch (e) {
+      return 'tab-1';
+    }
+  },
+
+  saveActivePOSTabId(id: string): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_POS_TAB, id);
+    } catch (e) {
+      // ignore
+    }
+  },
   // Medications (Inventory)
   getMedications(): Medication[] {
     try {
@@ -144,7 +205,15 @@ export const storageService = {
 
   saveMedications(medications: Medication[]): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.MEDICATIONS, JSON.stringify(medications));
+      // Pharmaceutical compliance check: enforce stock >= 0 and valid batch strings
+      const sanitized = medications.map((m) => ({
+        ...m,
+        stock: Math.max(0, Math.floor(Number(m.stock) || 0)),
+        minStockLevel: Math.max(0, Math.floor(Number(m.minStockLevel) || 0)),
+        batchNumber: m.batchNumber?.trim() || 'BATCH-UNSPECIFIED',
+        expiryDate: m.expiryDate?.trim() || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      }));
+      localStorage.setItem(STORAGE_KEYS.MEDICATIONS, JSON.stringify(sanitized));
     } catch (e) {
       console.error('Failed to save medications', e);
     }
@@ -231,7 +300,13 @@ export const storageService = {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.RECEIPT_SETTINGS);
       if (data) {
-        return { ...INITIAL_RECEIPT_SETTINGS, ...JSON.parse(data) };
+        const parsed = JSON.parse(data);
+        const settings = { ...INITIAL_RECEIPT_SETTINGS, ...parsed };
+        if (settings.pharmacyName === 'AfyaCare Pharmacy & Chemists' || !settings.pharmacyName) {
+          settings.pharmacyName = 'RG Pharma-POS';
+          this.saveReceiptSettings(settings);
+        }
+        return settings;
       }
     } catch (e) {
       console.error('Failed to load receipt settings', e);
@@ -377,6 +452,22 @@ export const storageService = {
             error: 'Action prohibited: Cannot downgrade or deactivate the last remaining active Administrator.',
           };
         }
+      }
+    }
+
+    // Admin self-downgrade protection
+    if (actingUser.id === targetUserId && updates.role && updates.role !== 'admin' && target.role === 'admin') {
+      return { success: false, error: 'Security restriction: Administrators cannot downgrade their own role.' };
+    }
+
+    // Last admin protection
+    if (target.role === 'admin' && updates.role && updates.role !== 'admin') {
+      const activeAdmins = currentUsers.filter((u) => u.role === 'admin' && u.status === 'active');
+      if (activeAdmins.length <= 1) {
+        return {
+          success: false,
+          error: 'Security restriction: Cannot downgrade the last remaining active Administrator.',
+        };
       }
     }
 

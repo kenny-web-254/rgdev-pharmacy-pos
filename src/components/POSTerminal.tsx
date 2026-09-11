@@ -6,8 +6,11 @@ import {
   Check,
   CornerDownLeft,
   CreditCard,
+  Edit2,
   FileCheck,
+  Layers,
   Minus,
+  PauseCircle,
   Pill,
   Plus,
   QrCode,
@@ -20,6 +23,7 @@ import {
   Trash2,
   User,
   Wallet,
+  X,
   Zap,
 } from 'lucide-react';
 import {
@@ -27,6 +31,7 @@ import {
   Medication,
   MedicationCategory,
   PaymentMethod,
+  POSTab,
   Prescription,
   ReceiptSettings,
   SaleTransaction,
@@ -46,6 +51,16 @@ interface POSTerminalProps {
   receiptSettings: ReceiptSettings;
   isOnline: boolean;
   currentUser: { name: string; role: UserRole };
+  // Tab Management Props
+  tabs?: POSTab[];
+  activeTabId?: string;
+  onSelectTab?: (tabId: string) => void;
+  onAddTab?: (customName?: string) => void;
+  onCloseTab?: (tabId: string) => void;
+  onRenameTab?: (tabId: string, newName: string) => void;
+  onToggleParkTab?: (tabId: string) => void;
+  activePatientName?: string;
+  onUpdatePatientName?: (name: string) => void;
 }
 
 export const POSTerminal: React.FC<POSTerminalProps> = ({
@@ -58,11 +73,44 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   receiptSettings,
   isOnline,
   currentUser,
+  tabs,
+  activeTabId,
+  onSelectTab,
+  onAddTab,
+  onCloseTab,
+  onRenameTab,
+  onToggleParkTab,
+  activePatientName,
+  onUpdatePatientName,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [barcodeQuickInput, setBarcodeQuickInput] = useState('');
-  const [patientNameInput, setPatientNameInput] = useState(() => storageService.getCartPatientName());
+  const [patientNameInput, setPatientNameInput] = useState(() => activePatientName || storageService.getCartPatientName());
+
+  // Tab editing state
+  const [editingTabId, setEditingTabId] = useState<string | null>(null);
+  const [editTabName, setEditTabName] = useState('');
+
+  const currentTab = tabs?.find((t) => t.id === activeTabId);
+
+  // Sync patient name input when active tab changes
+  useEffect(() => {
+    if (activePatientName !== undefined) {
+      setPatientNameInput(activePatientName);
+    } else if (currentTab) {
+      setPatientNameInput(currentTab.patientName || '');
+    }
+  }, [activeTabId, activePatientName, currentTab?.patientName]);
+
+  const handlePatientNameChange = (name: string) => {
+    setPatientNameInput(name);
+    if (onUpdatePatientName) {
+      onUpdatePatientName(name);
+    } else {
+      storageService.saveCartPatientName(name);
+    }
+  };
 
   // Quick Add search state for rapid typing & enter checkout
   const [quickAddInput, setQuickAddInput] = useState('');
@@ -72,18 +120,61 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   } | null>(null);
   const quickAddInputRef = useRef<HTMLInputElement>(null);
 
-  // Keyboard shortcut: Alt+Q jumps focus directly to Quick Add
+  // Keyboard shortcuts:
+  // Alt+Q: Jump focus to Quick Add
+  // Alt+N: New customer order tab
+  // Alt+H: Hold/Park active tab
+  // Alt+W: Close active tab
+  // Alt+1 to Alt+9: Switch to tab 1-9
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Alt+Q: Quick Add Focus
       if (e.altKey && e.key.toLowerCase() === 'q') {
         e.preventDefault();
         quickAddInputRef.current?.focus();
         quickAddInputRef.current?.select();
+        return;
+      }
+
+      // Alt+N: New Tab
+      if (e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        if (onAddTab) {
+          onAddTab();
+        }
+        return;
+      }
+
+      // Alt+H: Hold / Park current tab
+      if (e.altKey && e.key.toLowerCase() === 'h') {
+        e.preventDefault();
+        if (currentTab && onToggleParkTab) {
+          onToggleParkTab(currentTab.id);
+        }
+        return;
+      }
+
+      // Alt+W: Close current tab
+      if (e.altKey && e.key.toLowerCase() === 'w') {
+        e.preventDefault();
+        if (currentTab && onCloseTab) {
+          onCloseTab(currentTab.id);
+        }
+        return;
+      }
+
+      // Alt+1 to Alt+9: Switch to tab by index
+      if (e.altKey && /^[1-9]$/.test(e.key) && tabs && tabs.length > 0) {
+        const tabIdx = parseInt(e.key, 10) - 1;
+        if (tabs[tabIdx] && onSelectTab) {
+          e.preventDefault();
+          onSelectTab(tabs[tabIdx].id);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [onAddTab, onToggleParkTab, onCloseTab, onSelectTab, currentTab, tabs]);
 
   // Compute the first matching medication with prefix priority for Quick Add
   const normalizedQuickAdd = quickAddInput.trim().toLowerCase();
@@ -159,11 +250,6 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   const isExpiringSoon = (dateStr: string) => {
     const diffDays = (new Date(dateStr).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24);
     return diffDays > 0 && diffDays <= 90;
-  };
-
-  const handlePatientNameChange = (name: string) => {
-    setPatientNameInput(name);
-    storageService.saveCartPatientName(name);
   };
 
   // Filter medications
@@ -419,6 +505,78 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
     setIsCheckoutOpen(true);
   };
 
+  // One-Click Fast Cash Checkout for straight-forward OTC transactions
+  const handleQuickCashCheckout = () => {
+    if (cart.length === 0 || isSubmitting) return;
+
+    // Safety check for expired medications
+    const expiredInCart = cart.find((item) => isExpired(item.medication.expiryDate));
+    if (expiredInCart) {
+      alert(
+        `Safety Block: Cart contains expired item (${expiredInCart.medication.name}, expired ${expiredInCart.medication.expiryDate}). Remove it to proceed.`
+      );
+      return;
+    }
+
+    // Strict pharmaceutical compliance check: Stock levels must never fall below zero
+    for (const item of cart) {
+      if (item.quantity > item.medication.stock) {
+        alert(
+          `Pharmaceutical Compliance Error: Stock for "${item.medication.name}" cannot fall below zero. Available shelf stock is ${item.medication.stock}, requested: ${item.quantity}.`
+        );
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
+    try {
+      const receiptNumber = 'REC-' + Math.floor(100000 + Math.random() * 900000);
+      const roundedTotal = Math.ceil(total);
+
+      const transaction: SaleTransaction = {
+        id: 'tx-' + Date.now(),
+        receiptNumber,
+        timestamp: new Date().toISOString(),
+        cashierName: currentUser.name,
+        cashierRole: currentUser.role,
+        items: cart.map((it) => ({
+          medicationId: it.medication.id,
+          name: it.medication.name,
+          genericName: it.medication.genericName,
+          dosage: it.medication.dosage,
+          isPrescription: it.medication.isPrescriptionRequired,
+          rxNumber: it.rxNumber,
+          patientName: it.patientName || patientNameInput,
+          quantity: it.quantity,
+          unitPrice: it.medication.price,
+          totalPrice: it.medication.price * it.quantity * (1 - (it.discountPercent || 0) / 100),
+          batchNumber: it.medication.batchNumber || 'N/A',
+          expiryDate: it.medication.expiryDate || 'N/A',
+        })),
+        subtotal,
+        tax,
+        discount: cartDiscount,
+        total,
+        paymentMethod: 'Cash',
+        amountTendered: roundedTotal,
+        changeDue: 0,
+        cashAmount: roundedTotal,
+        patientName: patientNameInput || undefined,
+        isOffline: !isOnline,
+        synced: isOnline,
+        syncTimestamp: isOnline ? new Date().toISOString() : undefined,
+      };
+
+      onCompleteSale(transaction);
+      onUpdateCart([]);
+      storageService.clearCart();
+      setIsCheckoutOpen(false);
+      handlePatientNameChange('');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   // Generate new M-Pesa Transaction Code
   const handleGenerateMpesaCode = () => {
     const prefixes = ['QA', 'QB', 'SH', 'SK', 'TL', 'MG'];
@@ -451,6 +609,16 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
         `Safety Block: Cart contains expired item (${expiredInCart.medication.name}, expired ${expiredInCart.medication.expiryDate}). Remove it to proceed.`
       );
       return;
+    }
+
+    // Strict pharmaceutical compliance check: Stock levels must never fall below zero
+    for (const item of cart) {
+      if (item.quantity > item.medication.stock) {
+        setCheckoutError(
+          `Pharmaceutical Compliance Error: Stock for "${item.medication.name}" cannot fall below zero. Available shelf stock is ${item.medication.stock}, but ${item.quantity} was requested.`
+        );
+        return;
+      }
     }
 
     if (paymentMethod === 'Cash') {
@@ -517,6 +685,8 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           quantity: it.quantity,
           unitPrice: it.medication.price,
           totalPrice: it.medication.price * it.quantity * (1 - (it.discountPercent || 0) / 100),
+          batchNumber: it.medication.batchNumber || 'N/A',
+          expiryDate: it.medication.expiryDate || 'N/A',
         })),
         subtotal,
         tax,
@@ -607,6 +777,195 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           )}
         </button>
       </div>
+
+      {/* POS Multi-Customer Order Tabs Bar */}
+      {tabs && tabs.length > 0 && (
+        <div id="pos-tab-bar" className="bg-white rounded-2xl border border-slate-200 p-2.5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0 scrollbar-thin">
+            <div className="flex items-center gap-1 text-slate-400 pl-1 pr-1.5 shrink-0" title="Customer / Order Tabs">
+              <Layers className="w-4 h-4 text-teal-700" />
+              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider hidden sm:inline">Tabs:</span>
+            </div>
+
+            {tabs.map((tab, idx) => {
+              const isActive = tab.id === activeTabId;
+              const tabSubtotal = tab.cart.reduce((acc, item) => {
+                const itemTotal = item.medication.price * item.quantity;
+                const discount = item.discountPercent ? (itemTotal * item.discountPercent) / 100 : 0;
+                return acc + (itemTotal - discount);
+              }, 0);
+
+              return (
+                <div
+                  key={tab.id}
+                  id={`pos-tab-${tab.id}`}
+                  onClick={() => onSelectTab && onSelectTab(tab.id)}
+                  className={`group relative flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold cursor-pointer transition select-none shrink-0 ${
+                    isActive
+                      ? 'bg-teal-700 text-white shadow-xs ring-2 ring-teal-600/30'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                  }`}
+                >
+                  {/* Tab Index Number */}
+                  <span
+                    className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-black ${
+                      isActive ? 'bg-teal-800 text-teal-200' : 'bg-slate-200 text-slate-600'
+                    }`}
+                    title={`Alt + ${idx + 1}`}
+                  >
+                    {idx + 1}
+                  </span>
+
+                  {/* Tab Name (Editable) */}
+                  {editingTabId === tab.id ? (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (onRenameTab && editTabName.trim()) {
+                          onRenameTab(tab.id, editTabName.trim());
+                        }
+                        setEditingTabId(null);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-1"
+                    >
+                      <input
+                        type="text"
+                        autoFocus
+                        value={editTabName}
+                        onChange={(e) => setEditTabName(e.target.value)}
+                        onBlur={() => {
+                          if (onRenameTab && editTabName.trim()) {
+                            onRenameTab(tab.id, editTabName.trim());
+                          }
+                          setEditingTabId(null);
+                        }}
+                        className="w-28 px-1.5 py-0.5 text-xs bg-white text-slate-900 rounded border border-teal-400 focus:outline-hidden font-bold"
+                      />
+                    </form>
+                  ) : (
+                    <span
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setEditingTabId(tab.id);
+                        setEditTabName(tab.name);
+                      }}
+                      className="font-bold max-w-[130px] truncate"
+                      title={`${tab.name} (Double-click to rename)`}
+                    >
+                      {tab.name}
+                    </span>
+                  )}
+
+                  {/* Parked / Hold Indicator */}
+                  {tab.isParked && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider ${
+                        isActive
+                          ? 'bg-amber-400 text-slate-950 shadow-xs'
+                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                      }`}
+                      title="This tab is currently on hold / parked"
+                    >
+                      Hold
+                    </span>
+                  )}
+
+                  {/* Item count & Subtotal badge */}
+                  <span
+                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md ${
+                      isActive ? 'bg-teal-800 text-teal-100' : 'bg-slate-200/80 text-slate-600'
+                    }`}
+                  >
+                    {tab.cart.length} {tab.cart.length === 1 ? 'item' : 'items'}
+                    {tab.cart.length > 0 && ` • ${formatKSh(tabSubtotal)}`}
+                  </span>
+
+                  {/* Inline edit button */}
+                  {isActive && editingTabId !== tab.id && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingTabId(tab.id);
+                        setEditTabName(tab.name);
+                      }}
+                      className="opacity-70 hover:opacity-100 p-0.5 text-teal-200 hover:text-white transition"
+                      title="Rename tab"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
+                  )}
+
+                  {/* Close Tab Button */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onCloseTab) {
+                        onCloseTab(tab.id);
+                      }
+                    }}
+                    className={`p-0.5 rounded-md transition ${
+                      isActive
+                        ? 'text-teal-200 hover:text-white hover:bg-teal-800'
+                        : 'text-slate-400 hover:text-rose-600 hover:bg-slate-200'
+                    }`}
+                    title="Close tab (Alt+W)"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+
+            {/* Add New Tab Button */}
+            <button
+              type="button"
+              id="pos-new-tab-btn"
+              onClick={() => onAddTab && onAddTab()}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200/80 transition cursor-pointer shrink-0 shadow-2xs active:scale-95"
+              title="Open a new customer order tab (Alt+N)"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>New Tab</span>
+              <kbd className="hidden sm:inline-block px-1 py-0.2 bg-teal-100 text-teal-800 text-[9px] rounded font-mono font-semibold">
+                Alt+N
+              </kbd>
+            </button>
+          </div>
+
+          {/* Right Tab Controls: Park / Hold active tab & Quick helper */}
+          <div className="flex items-center justify-between md:justify-end gap-2 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
+            {currentTab && (
+              <button
+                type="button"
+                id="pos-park-tab-btn"
+                onClick={() => onToggleParkTab && onToggleParkTab(currentTab.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer shadow-2xs active:scale-95 ${
+                  currentTab.isParked
+                    ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 font-black ring-2 ring-amber-300'
+                    : 'bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300'
+                }`}
+                title="Hold/Park this customer's cart to serve next customer (Alt+H)"
+              >
+                <PauseCircle className="w-4 h-4 text-amber-700" />
+                <span>{currentTab.isParked ? 'Resume Tab' : 'Hold / Park Tab'}</span>
+                <kbd className="hidden lg:inline-block px-1 py-0.2 bg-amber-200/70 text-amber-900 text-[9px] rounded font-mono">
+                  Alt+H
+                </kbd>
+              </button>
+            )}
+
+            <div className="text-[11px] text-slate-500 font-mono hidden xl:flex items-center gap-2">
+              <span className="text-slate-400">•</span>
+              <span>Alt+1..{Math.min(9, tabs.length)}: Switch</span>
+              <span className="text-slate-400">•</span>
+              <span>Alt+W: Close</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left 7 cols: Catalog & Fast Barcode Bar */}
@@ -859,22 +1218,52 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
               <ShoppingCart className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-slate-900">Active Dispense Cart</h2>
+              <div className="flex items-center gap-1.5">
+                <h2 className="text-sm font-bold text-slate-900">Active Dispense Cart</h2>
+                {currentTab && (
+                  <span className="text-[10px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-teal-100 text-teal-800 border border-teal-200">
+                    {currentTab.name}
+                  </span>
+                )}
+                {currentTab?.isParked && (
+                  <span className="text-[10px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-amber-200 text-amber-900 border border-amber-300">
+                    On Hold
+                  </span>
+                )}
+              </div>
               <p className="text-[11px] text-slate-500">
                 {cart.length} line item{cart.length === 1 ? '' : 's'}
               </p>
             </div>
           </div>
 
-          {cart.length > 0 && (
-            <button
-              onClick={handleClearCart}
-              className="text-xs text-rose-600 hover:text-rose-800 font-semibold flex items-center gap-1 p-1"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Clear
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {currentTab && onToggleParkTab && (
+              <button
+                type="button"
+                onClick={() => onToggleParkTab(currentTab.id)}
+                className={`text-xs font-semibold flex items-center gap-1 px-2 py-1 rounded-lg transition ${
+                  currentTab.isParked
+                    ? 'bg-amber-100 text-amber-900 hover:bg-amber-200'
+                    : 'text-slate-600 hover:text-amber-800 hover:bg-amber-50'
+                }`}
+                title={currentTab.isParked ? 'Resume this tab' : 'Hold / Park this tab'}
+              >
+                <PauseCircle className="w-3.5 h-3.5 text-amber-600" />
+                <span>{currentTab.isParked ? 'Resume' : 'Park'}</span>
+              </button>
+            )}
+
+            {cart.length > 0 && (
+              <button
+                onClick={handleClearCart}
+                className="text-xs text-rose-600 hover:text-rose-800 font-semibold flex items-center gap-1 p-1 hover:bg-rose-50 rounded-lg transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Clear
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Patient Reference Field */}
@@ -883,8 +1272,8 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           <input
             type="text"
             value={patientNameInput}
-            onChange={(e) => setPatientNameInput(e.target.value)}
-            placeholder="Customer / Patient Name (optional)..."
+            onChange={(e) => handlePatientNameChange(e.target.value)}
+            placeholder="Customer / Patient Name (e.g. Grace Muthoni)..."
             className="w-full bg-transparent border-none focus:outline-hidden text-xs font-semibold text-slate-800 placeholder:text-slate-400"
           />
         </div>
@@ -1008,15 +1397,30 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
             </div>
           </div>
 
-          <button
-            id="proceed-checkout-btn"
-            onClick={handleStartCheckout}
-            disabled={cart.length === 0}
-            className="w-full py-3 bg-teal-700 hover:bg-teal-800 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-bold text-sm shadow-md transition active:scale-98 flex items-center justify-center gap-2"
-          >
-            <Wallet className="w-4 h-4" />
-            <span>Pay & Print Receipt ({formatKSh(total)})</span>
-          </button>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              id="instant-cash-btn"
+              type="button"
+              onClick={handleQuickCashCheckout}
+              disabled={cart.length === 0 || isSubmitting}
+              className="py-3 px-3 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-bold text-xs shadow-md transition active:scale-98 flex items-center justify-center gap-1.5"
+              title="Fast one-click checkout with exact cash"
+            >
+              <Zap className="w-4 h-4 text-amber-300" />
+              <span>Quick Cash ({formatKSh(total)})</span>
+            </button>
+
+            <button
+              id="proceed-checkout-btn"
+              type="button"
+              onClick={handleStartCheckout}
+              disabled={cart.length === 0 || isSubmitting}
+              className="py-3 px-3 bg-teal-700 hover:bg-teal-800 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl font-bold text-xs shadow-md transition active:scale-98 flex items-center justify-center gap-1.5"
+            >
+              <Wallet className="w-4 h-4" />
+              <span>Checkout Options</span>
+            </button>
+          </div>
         </div>
       </div>
       </div>

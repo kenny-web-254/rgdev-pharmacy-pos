@@ -51,6 +51,7 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
   onUpdateMedication,
   onAddMedication,
   onDeleteMedication,
+  onAdjustStock,
   onAddToCart,
   userRole,
 }) => {
@@ -142,11 +143,16 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
   // Modals
   const [editingMedication, setEditingMedication] = useState<Medication | null>(null);
   const [restockMedication, setRestockMedication] = useState<Medication | null>(null);
+  const [adjustmentMode, setAdjustmentMode] = useState<'intake' | 'writeoff' | 'count'>('intake');
   const [medicationToDelete, setMedicationToDelete] = useState<Medication | null>(null);
   const [restockQty, setRestockQty] = useState<number>(50);
   const [restockBatch, setRestockBatch] = useState<string>('');
   const [restockExpiry, setRestockExpiry] = useState<string>('2028-06-30');
+  const [restockReason, setRestockReason] = useState<string>('Stock intake / Supplier delivery');
+  const [restockError, setRestockError] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [addFormError, setAddFormError] = useState<string | null>(null);
+  const [editFormError, setEditFormError] = useState<string | null>(null);
   const [exportSuccessMessage, setExportSuccessMessage] = useState<string | null>(null);
 
   // New item form
@@ -266,45 +272,238 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
   const handleRestockSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!restockMedication || !isAdmin) return;
-    const updated: Medication = {
-      ...restockMedication,
-      stock: restockMedication.stock + Number(restockQty),
-      batchNumber: restockBatch || restockMedication.batchNumber,
-      expiryDate: restockExpiry || restockMedication.expiryDate,
-    };
-    onUpdateMedication(updated);
+    setRestockError(null);
+
+    const qty = Number(restockQty);
+    if (isNaN(qty) || qty < 0) {
+      setRestockError('Please enter a valid non-negative adjustment quantity.');
+      return;
+    }
+
+    if (adjustmentMode === 'intake' && qty <= 0) {
+      setRestockError('Intake restock quantity must be greater than zero.');
+      return;
+    }
+
+    if (adjustmentMode === 'writeoff' && qty <= 0) {
+      setRestockError('Write-off deduction quantity must be greater than zero.');
+      return;
+    }
+
+    // Strictly validate batch number for pharmaceutical compliance
+    const batch = restockBatch.trim();
+    if (!batch) {
+      setRestockError('Pharmaceutical Compliance Error: Batch/Lot number is strictly mandatory for every product adjustment.');
+      return;
+    }
+
+    // Strictly validate expiration date
+    const expiry = restockExpiry.trim();
+    if (!expiry) {
+      setRestockError('Pharmaceutical Compliance Error: Expiration date is strictly mandatory.');
+      return;
+    }
+
+    if (!restockReason.trim()) {
+      setRestockError('Pharmaceutical Compliance Error: Justification reason is strictly mandatory for audit trail.');
+      return;
+    }
+
+    // Strict stock calculation: Stock levels must NEVER fall below zero
+    let targetStock: number;
+    if (adjustmentMode === 'intake') {
+      targetStock = restockMedication.stock + Math.floor(qty);
+    } else if (adjustmentMode === 'writeoff') {
+      if (qty > restockMedication.stock) {
+        setRestockError(
+          `Pharmaceutical Compliance Violation: Stock cannot fall below zero! Shelf stock is currently ${restockMedication.stock}, cannot deduct ${qty}.`
+        );
+        return;
+      }
+      targetStock = restockMedication.stock - Math.floor(qty);
+    } else {
+      // count mode
+      targetStock = Math.floor(qty);
+    }
+
+    if (targetStock < 0) {
+      setRestockError('Pharmaceutical Compliance Violation: Resulting stock level cannot be negative.');
+      return;
+    }
+
+    const auditReason = `[${adjustmentMode.toUpperCase()}] ${restockReason.trim()}`;
+
+    if (onAdjustStock) {
+      onAdjustStock(
+        restockMedication.id,
+        targetStock,
+        auditReason,
+        batch,
+        expiry
+      );
+    } else {
+      const updated: Medication = {
+        ...restockMedication,
+        stock: targetStock,
+        batchNumber: batch,
+        expiryDate: expiry,
+      };
+      onUpdateMedication(updated);
+    }
     setRestockMedication(null);
   };
 
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMedication || !isAdmin) return;
-    onUpdateMedication(editingMedication);
+    setEditFormError(null);
+
+    const name = editingMedication.name.trim();
+    const barcode = editingMedication.barcode.trim();
+    const price = Number(editingMedication.price);
+    const costPrice = Number(editingMedication.costPrice ?? 0);
+    const stock = Number(editingMedication.stock);
+    const minStock = Number(editingMedication.minStockLevel);
+    const batchNumber = editingMedication.batchNumber?.trim();
+    const expiryDate = editingMedication.expiryDate?.trim();
+
+    if (!name) {
+      setEditFormError('Medication trade name is required.');
+      return;
+    }
+    if (!barcode) {
+      setEditFormError('NDC / Barcode number is required.');
+      return;
+    }
+    // Check for duplicate barcode with other medications
+    const duplicate = medications.find(
+      (m) => m.id !== editingMedication.id && m.barcode.toLowerCase() === barcode.toLowerCase()
+    );
+    if (duplicate) {
+      setEditFormError(`Barcode "${barcode}" is already assigned to "${duplicate.name}".`);
+      return;
+    }
+    if (isNaN(price) || price <= 0) {
+      setEditFormError('Retail selling price must be greater than zero.');
+      return;
+    }
+    if (isNaN(costPrice) || costPrice < 0) {
+      setEditFormError('Acquisition cost cannot be negative.');
+      return;
+    }
+    // Strict stock level check
+    if (isNaN(stock) || stock < 0) {
+      setEditFormError('Pharmaceutical Compliance Error: Stock level cannot fall below zero.');
+      return;
+    }
+    if (isNaN(minStock) || minStock < 0) {
+      setEditFormError('Min alert stock level cannot be negative.');
+      return;
+    }
+    // Strict batch and expiry checks for compliance
+    if (!batchNumber) {
+      setEditFormError('Pharmaceutical Compliance Error: Batch/Lot number is strictly required.');
+      return;
+    }
+    if (!expiryDate) {
+      setEditFormError('Pharmaceutical Compliance Error: Batch expiration date is strictly required.');
+      return;
+    }
+
+    onUpdateMedication({
+      ...editingMedication,
+      name,
+      barcode,
+      price,
+      costPrice,
+      stock: Math.max(0, Math.floor(stock)),
+      minStockLevel: minStock,
+      batchNumber,
+      expiryDate,
+    });
     setEditingMedication(null);
   };
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) return;
+    setAddFormError(null);
+
+    const name = newMedForm.name?.trim();
+    const genericName = newMedForm.genericName?.trim();
+    const dosage = newMedForm.dosage?.trim();
+    const barcode = newMedForm.barcode?.trim();
+    const price = Number(newMedForm.price);
+    const costPrice = Number(newMedForm.costPrice ?? 0);
+    const stock = Number(newMedForm.stock);
+    const minStock = Number(newMedForm.minStockLevel);
+    const batchNumber = newMedForm.batchNumber?.trim() || 'BATCH-' + Math.floor(1000 + Math.random() * 9000);
+    const expiryDate = newMedForm.expiryDate?.trim();
+    const manufacturer = newMedForm.manufacturer?.trim() || 'Standard Labs';
+
+    if (!name) {
+      setAddFormError('Medication trade name is required.');
+      return;
+    }
+    if (!genericName) {
+      setAddFormError('Generic active ingredient is required.');
+      return;
+    }
+    if (!dosage) {
+      setAddFormError('Dosage & strength is required.');
+      return;
+    }
+    if (!barcode) {
+      setAddFormError('NDC / Barcode is required.');
+      return;
+    }
+    // Prevent duplicate barcode in inventory
+    const existing = medications.find((m) => m.barcode.toLowerCase() === barcode.toLowerCase());
+    if (existing) {
+      setAddFormError(`A medication with barcode "${barcode}" already exists (${existing.name}).`);
+      return;
+    }
+    if (isNaN(price) || price <= 0) {
+      setAddFormError('Selling price must be a valid positive amount.');
+      return;
+    }
+    if (isNaN(costPrice) || costPrice < 0) {
+      setAddFormError('Cost price must be zero or a positive amount.');
+      return;
+    }
+    if (isNaN(stock) || stock < 0) {
+      setAddFormError('Initial stock cannot be negative.');
+      return;
+    }
+    if (isNaN(minStock) || minStock < 0) {
+      setAddFormError('Min stock alert threshold cannot be negative.');
+      return;
+    }
+    if (!expiryDate) {
+      setAddFormError('Expiration date is required.');
+      return;
+    }
+
     const fullMed: Medication = {
       id: 'med-' + Date.now(),
-      name: newMedForm.name || 'New Medication',
-      genericName: newMedForm.genericName || '',
-      dosage: newMedForm.dosage || '10mg',
+      name,
+      genericName,
+      dosage,
       form: newMedForm.form || 'Tablet',
       category: (newMedForm.category as MedicationCategory) || 'Pain & Analgesics',
       isPrescriptionRequired: Boolean(newMedForm.isPrescriptionRequired),
-      barcode: newMedForm.barcode || '000' + Math.floor(10000000 + Math.random() * 90000000),
-      price: Number(newMedForm.price) || 10,
-      costPrice: Number(newMedForm.costPrice) || 3,
-      stock: Number(newMedForm.stock) || 30,
-      minStockLevel: Number(newMedForm.minStockLevel) || 15,
-      batchNumber: newMedForm.batchNumber || 'BATCH-NEW',
-      expiryDate: newMedForm.expiryDate || '2028-12-31',
-      manufacturer: newMedForm.manufacturer || 'Standard Labs',
+      barcode,
+      price,
+      costPrice,
+      stock,
+      minStockLevel: minStock,
+      batchNumber,
+      expiryDate,
+      manufacturer,
     };
     onAddMedication(fullMed);
     setIsAddModalOpen(false);
+    setAddFormError(null);
   };
 
   // CSV Export for external auditing, compliance, and backups
@@ -1132,95 +1331,256 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
         </div>
       </div>
 
-      {/* Restock Modal (Admin Only) */}
-      {restockMedication && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-xs p-4 no-print">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <PackagePlus className="w-5 h-5 text-amber-600" />
-                Restock Medication Batch
-              </h3>
-              <button
-                onClick={() => setRestockMedication(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {/* Stock Adjustment & Batch Reconciliation Modal (Admin Only) */}
+      {restockMedication && (() => {
+        const projectedStock =
+          adjustmentMode === 'intake'
+            ? restockMedication.stock + (Number(restockQty) || 0)
+            : adjustmentMode === 'writeoff'
+            ? restockMedication.stock - (Number(restockQty) || 0)
+            : Number(restockQty) || 0;
+        const isBelowZero = projectedStock < 0;
 
-            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
-              <div className="font-bold text-slate-900 text-sm">{restockMedication.name}</div>
-              <div className="text-slate-500">{restockMedication.genericName} • {restockMedication.dosage}</div>
-              <div className="mt-1 flex gap-2">
-                <span className="font-semibold text-slate-700">Current Stock: {restockMedication.stock}</span>
-                <span className="text-slate-400">•</span>
-                <span className="text-amber-700 font-semibold">Min Alert: {restockMedication.minStockLevel}</span>
-              </div>
-            </div>
-
-            <form onSubmit={handleRestockSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Quantity to Add to Stock:
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10000"
-                  value={restockQty}
-                  onChange={(e) => setRestockQty(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 font-bold"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  New / Updated Batch Number:
-                </label>
-                <input
-                  type="text"
-                  value={restockBatch}
-                  onChange={(e) => setRestockBatch(e.target.value)}
-                  placeholder="e.g. BATCH-2026-X9"
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 font-mono"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Batch Expiration Date:
-                </label>
-                <input
-                  type="date"
-                  value={restockExpiry}
-                  onChange={(e) => setRestockExpiry(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500"
-                  required
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-xs p-4 no-print">
+            <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 p-6 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <PackagePlus className="w-5 h-5 text-teal-600" />
+                  Pharmaceutical Stock Adjustment & Batch Audit
+                </h3>
                 <button
-                  type="button"
                   onClick={() => setRestockMedication(null)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold shadow-xs transition"
-                >
-                  Confirm Restock (+{restockQty})
+                  <X className="w-4 h-4" />
                 </button>
               </div>
-            </form>
+
+              {/* Medication Brief & Current Stock */}
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-2">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="font-bold text-slate-900 text-sm">{restockMedication.name}</div>
+                    <div className="text-slate-500">{restockMedication.genericName} • {restockMedication.dosage} ({restockMedication.form})</div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md bg-teal-100 text-teal-800 font-semibold text-[10px]">
+                    Regulatory Tracked
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-600 pt-1 border-t border-slate-200">
+                  <span>Current Shelf Stock: <strong className="text-slate-900">{restockMedication.stock} units</strong></span>
+                  <span>Active Batch: <strong className="font-mono text-slate-800">{restockMedication.batchNumber}</strong></span>
+                  <span>Expiry: <strong className="text-slate-800">{restockMedication.expiryDate}</strong></span>
+                </div>
+              </div>
+
+              {/* Adjustment Mode Selector */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Adjustment Type:
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdjustmentMode('intake');
+                      setRestockReason('Stock intake / Supplier delivery');
+                      setRestockError(null);
+                    }}
+                    className={`py-2 px-2 text-xs font-semibold rounded-xl border transition flex flex-col items-center gap-1 ${
+                      adjustmentMode === 'intake'
+                        ? 'bg-teal-50 border-teal-500 text-teal-800 shadow-xs'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>➕ Intake / Restock</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdjustmentMode('writeoff');
+                      setRestockReason('Damaged / Expired stock quarantine write-off');
+                      setRestockError(null);
+                    }}
+                    className={`py-2 px-2 text-xs font-semibold rounded-xl border transition flex flex-col items-center gap-1 ${
+                      adjustmentMode === 'writeoff'
+                        ? 'bg-rose-50 border-rose-500 text-rose-800 shadow-xs'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>➖ Write-off / Spoilage</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdjustmentMode('count');
+                      setRestockReason('Physical count audit adjustment');
+                      setRestockQty(restockMedication.stock);
+                      setRestockError(null);
+                    }}
+                    className={`py-2 px-2 text-xs font-semibold rounded-xl border transition flex flex-col items-center gap-1 ${
+                      adjustmentMode === 'count'
+                        ? 'bg-blue-50 border-blue-500 text-blue-800 shadow-xs'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>⚖️ Physical Count</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Real-time Projected Stock Status */}
+              <div
+                className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                  isBelowZero
+                    ? 'bg-rose-50 border-rose-300 text-rose-800'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                }`}
+              >
+                <div>
+                  <span className="font-semibold">
+                    {adjustmentMode === 'intake' && 'Projected Stock After Intake:'}
+                    {adjustmentMode === 'writeoff' && 'Projected Stock After Write-off:'}
+                    {adjustmentMode === 'count' && 'New Verified Shelf Stock Level:'}
+                  </span>
+                  <div className="font-mono text-sm font-bold mt-0.5">
+                    {restockMedication.stock} {adjustmentMode === 'intake' ? '+' : adjustmentMode === 'writeoff' ? '-' : '➔'}{' '}
+                    {restockQty || 0} = {projectedStock} units
+                  </div>
+                </div>
+                {isBelowZero ? (
+                  <span className="px-2 py-1 rounded bg-rose-200 text-rose-900 font-bold text-[11px]">
+                    ⛔ Invalid: Below 0
+                  </span>
+                ) : (
+                  <span className="px-2 py-1 rounded bg-emerald-200 text-emerald-900 font-bold text-[11px]">
+                    ✓ Compliance Pass
+                  </span>
+                )}
+              </div>
+
+              {restockError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
+                  {restockError}
+                </div>
+              )}
+
+              <form onSubmit={handleRestockSubmit} className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      {adjustmentMode === 'intake' ? 'Quantity to Add:' : adjustmentMode === 'writeoff' ? 'Quantity to Deduct:' : 'Actual Physical Count:'}
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={adjustmentMode === 'writeoff' ? restockMedication.stock : 10000}
+                      value={restockQty}
+                      onChange={(e) => {
+                        setRestockQty(Math.max(0, parseInt(e.target.value) || 0));
+                        setRestockError(null);
+                      }}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 font-bold"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Batch / Lot Number *
+                    </label>
+                    <input
+                      type="text"
+                      value={restockBatch}
+                      onChange={(e) => {
+                        setRestockBatch(e.target.value);
+                        setRestockError(null);
+                      }}
+                      placeholder="e.g. BATCH-2026-X9"
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 font-mono"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Batch Expiration Date *
+                    </label>
+                    <input
+                      type="date"
+                      value={restockExpiry}
+                      onChange={(e) => {
+                        setRestockExpiry(e.target.value);
+                        setRestockError(null);
+                      }}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Justification Reason:
+                    </label>
+                    <select
+                      value={restockReason}
+                      onChange={(e) => setRestockReason(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 bg-white"
+                    >
+                      {adjustmentMode === 'intake' && (
+                        <>
+                          <option value="Stock intake / Supplier delivery">Stock intake / Supplier delivery</option>
+                          <option value="Emergency stock transfer">Emergency stock transfer</option>
+                          <option value="Customer return / Re-shelved">Customer return / Re-shelved</option>
+                        </>
+                      )}
+                      {adjustmentMode === 'writeoff' && (
+                        <>
+                          <option value="Damaged / Expired stock quarantine write-off">Damaged / Expired stock quarantine write-off</option>
+                          <option value="Broken ampoule / Vial spillage">Broken ampoule / Vial spillage</option>
+                          <option value="Regulatory batch recall / Quarantine">Regulatory batch recall / Quarantine</option>
+                        </>
+                      )}
+                      {adjustmentMode === 'count' && (
+                        <>
+                          <option value="Physical count audit adjustment">Physical count audit adjustment</option>
+                          <option value="Discrepancy reconciliation">Discrepancy reconciliation</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setRestockMedication(null)}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isBelowZero || !restockBatch.trim() || !restockExpiry.trim()}
+                    className={`px-4 py-2 rounded-xl text-white text-xs font-semibold shadow-xs transition ${
+                      isBelowZero || !restockBatch.trim() || !restockExpiry.trim()
+                        ? 'bg-slate-300 cursor-not-allowed'
+                        : adjustmentMode === 'writeoff'
+                        ? 'bg-rose-600 hover:bg-rose-700'
+                        : 'bg-teal-700 hover:bg-teal-800'
+                    }`}
+                  >
+                    Apply Adjustment (New Stock: {Math.max(0, projectedStock)})
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Edit Medication Modal */}
       {editingMedication && (
@@ -1238,6 +1598,12 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {editFormError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
+                {editFormError}
+              </div>
+            )}
 
             <form onSubmit={handleEditSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -1310,12 +1676,13 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Current Stock Units
+                    Current Stock Units (Min: 0) *
                   </label>
                   <input
                     type="number"
+                    min="0"
                     value={editingMedication.stock}
-                    onChange={(e) => setEditingMedication({ ...editingMedication, stock: parseInt(e.target.value) || 0 })}
+                    onChange={(e) => setEditingMedication({ ...editingMedication, stock: Math.max(0, parseInt(e.target.value) || 0) })}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500"
                     required
                   />
@@ -1323,12 +1690,39 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Min Alert Stock Level
+                    Min Alert Stock Level *
                   </label>
                   <input
                     type="number"
+                    min="0"
                     value={editingMedication.minStockLevel}
-                    onChange={(e) => setEditingMedication({ ...editingMedication, minStockLevel: parseInt(e.target.value) || 0 })}
+                    onChange={(e) => setEditingMedication({ ...editingMedication, minStockLevel: Math.max(0, parseInt(e.target.value) || 0) })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Batch / Lot Number *
+                  </label>
+                  <input
+                    type="text"
+                    value={editingMedication.batchNumber || ''}
+                    onChange={(e) => setEditingMedication({ ...editingMedication, batchNumber: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 font-mono"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Batch Expiration Date *
+                  </label>
+                  <input
+                    type="date"
+                    value={editingMedication.expiryDate || ''}
+                    onChange={(e) => setEditingMedication({ ...editingMedication, expiryDate: e.target.value })}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500"
                     required
                   />
@@ -1336,7 +1730,7 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
 
                 <div className="col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    NDC Barcode Number
+                    NDC Barcode Number *
                   </label>
                   <input
                     type="text"
@@ -1384,6 +1778,12 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {addFormError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
+                {addFormError}
+              </div>
+            )}
 
             <form onSubmit={handleAddSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -1484,6 +1884,20 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Acquisition Cost Price (KSh)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={newMedForm.costPrice}
+                    onChange={(e) => setNewMedForm({ ...newMedForm, costPrice: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Initial Stock
                   </label>
                   <input
@@ -1503,6 +1917,47 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
                     type="number"
                     value={newMedForm.minStockLevel}
                     onChange={(e) => setNewMedForm({ ...newMedForm, minStockLevel: parseInt(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Batch / Lot Number
+                  </label>
+                  <input
+                    type="text"
+                    value={newMedForm.batchNumber}
+                    onChange={(e) => setNewMedForm({ ...newMedForm, batchNumber: e.target.value })}
+                    placeholder="e.g. BATCH-8821"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 font-mono"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Batch Expiration Date
+                  </label>
+                  <input
+                    type="date"
+                    value={newMedForm.expiryDate}
+                    onChange={(e) => setNewMedForm({ ...newMedForm, expiryDate: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Manufacturer / Supplier
+                  </label>
+                  <input
+                    type="text"
+                    value={newMedForm.manufacturer}
+                    onChange={(e) => setNewMedForm({ ...newMedForm, manufacturer: e.target.value })}
+                    placeholder="e.g. Cosmos Pharmaceuticals"
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500"
                     required
                   />

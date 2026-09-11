@@ -14,9 +14,9 @@ export default defineConfig(() => {
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         manifest: {
           id: '/',
-          name: 'Pharmacy POS',
-          short_name: 'PharmaPOS',
-          description: 'Pharmacy Point of Sale with prescription barcode scanning, inventory alerts, and offline sync.',
+          name: 'RG Pharma-POS',
+          short_name: 'RG Pharma-POS',
+          description: 'RG Pharma-POS Point of Sale with customer tabs, prescription barcode scanning, inventory alerts, and offline sync.',
           theme_color: '#0f766e',
           background_color: '#f8fafc',
           display: 'standalone',
@@ -58,10 +58,11 @@ export default defineConfig(() => {
       },
     },
     server: {
+      host: '0.0.0.0',
+      port: 3000,
+      allowedHosts: true as const,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };

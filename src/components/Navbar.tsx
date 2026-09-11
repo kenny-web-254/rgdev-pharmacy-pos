@@ -158,7 +158,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
           <div>
             <div className="text-sm font-extrabold text-slate-900 leading-tight truncate max-w-[160px] sm:max-w-xs">
-              {pharmacyName || 'AfyaCare Pharmacy'}
+              {pharmacyName || 'RG Pharma-POS'}
             </div>
             <div className="text-[10px] text-teal-700 font-semibold flex items-center gap-1">
               <span>POS PWA</span>
@@ -375,7 +375,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
             <div>
               <div className="text-base font-black text-slate-900 leading-tight truncate max-w-[140px] lg:max-w-[170px]">
-                {pharmacyName || 'AfyaCare POS'}
+                {pharmacyName || 'RG Pharma-POS'}
               </div>
               <div className="text-[11px] text-teal-700 font-semibold tracking-wide flex items-center gap-1">
                 <span>Kenyan Shillings</span>

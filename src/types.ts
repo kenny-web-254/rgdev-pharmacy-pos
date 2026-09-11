@@ -1,5 +1,5 @@
 /**
- * Pharmacy POS Types & Interfaces
+ * RG Pharma-POS Types & Interfaces
  */
 
 export type UserRole = 'admin' | 'staff' | 'cashier';
@@ -106,6 +106,17 @@ export interface CartItem {
   discountPercent?: number;
 }
 
+export interface POSTab {
+  id: string;
+  name: string; // e.g. "Tab 1", "Walk-in #1", "Grace Muthoni"
+  cart: CartItem[];
+  patientName?: string;
+  isParked?: boolean;
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type PaymentMethod = 
   | 'Cash' 
   | 'M-Pesa' 
@@ -130,6 +141,8 @@ export interface SaleTransaction {
     quantity: number;
     unitPrice: number;
     totalPrice: number;
+    batchNumber?: string;
+    expiryDate?: string;
   }[];
   subtotal: number;
   tax: number;
@@ -155,6 +168,9 @@ export interface SaleTransaction {
 export interface ReceiptSettings {
   pharmacyName: string;
   tagline: string;
+  logoUrl?: string;
+  showLogo?: boolean;
+  logoHeight?: number;
   addressLine1: string;
   addressLine2: string;
   phone: string;

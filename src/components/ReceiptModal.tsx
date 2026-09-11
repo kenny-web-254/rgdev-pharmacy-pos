@@ -83,6 +83,8 @@ ${settings.emergencyPhone}
 
   const is58mm = overrideWidth === '58mm';
   const isPartial = transaction.paymentMethod === 'Partial (Cash + M-Pesa)';
+  const isShowLogo = (settings.showLogo ?? true) && Boolean(settings.logoUrl);
+  const logoHeight = settings.logoHeight || 48;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-4">
@@ -159,6 +161,17 @@ ${settings.emergencyPhone}
           >
             {/* Header / Brand */}
             <div className="text-center pb-3 border-b border-dashed border-slate-400 space-y-1">
+              {isShowLogo && (
+                <div className="flex justify-center mb-1.5">
+                  <img
+                    src={settings.logoUrl}
+                    alt={settings.pharmacyName}
+                    referrerPolicy="no-referrer"
+                    style={{ maxHeight: `${logoHeight}px` }}
+                    className="max-w-[140px] object-contain filter grayscale contrast-125"
+                  />
+                </div>
+              )}
               <div className="flex justify-center mb-1">
                 <span className="font-bold text-base tracking-wider uppercase">
                   {settings.pharmacyName}
@@ -349,6 +362,17 @@ ${settings.emergencyPhone}
         >
           {/* Print Header */}
           <div className="text-center pb-2 border-b border-dashed border-black">
+            {isShowLogo && (
+              <div className="mb-1.5 flex justify-center text-center">
+                <img
+                  src={settings.logoUrl}
+                  alt={settings.pharmacyName}
+                  referrerPolicy="no-referrer"
+                  style={{ maxHeight: `${logoHeight}px` }}
+                  className="max-w-[140px] mx-auto object-contain filter grayscale contrast-125 block"
+                />
+              </div>
+            )}
             <h1 className="font-bold text-sm tracking-wider uppercase m-0">{settings.pharmacyName}</h1>
             <p className="text-[10px] m-0">{settings.tagline}</p>
             <p className="text-[10px] m-0">{settings.addressLine1}</p>

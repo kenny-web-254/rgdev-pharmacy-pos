@@ -1,6 +1,6 @@
 {
-  "name": "Pharmacy POS",
-  "description": "Progressive Web App for pharmacy point of sale featuring online/offline resilience, prescription barcode scanning, inventory tracking with low-stock alerts, receipt printing, and role-based access.",
+  "name": "RG Pharma-POS",
+  "description": "Progressive Web App for RG Pharma-POS featuring online/offline resilience, multi-order customer tabs, prescription barcode scanning, inventory tracking with low-stock alerts, receipt printing, and role-based access.",
   "requestFramePermissions": [
     "camera"
   ],

@@ -2,6 +2,7 @@ import {
   AuditLog,
   CartItem,
   InventoryFilters,
+  MedicalTest,
   Medication,
   POSTab,
   Prescription,
@@ -12,18 +13,19 @@ import {
 } from '../types';
 import {
   DEMO_USERS,
-  DEFAULT_MEDICATION_CATEGORIES,
   INITIAL_AUDIT_LOGS,
   INITIAL_MEDICATIONS,
   INITIAL_PRESCRIPTIONS,
   INITIAL_RECEIPT_SETTINGS,
+  INITIAL_TESTS,
   INITIAL_TRANSACTIONS,
 } from '../data/mockData';
+import { getSupabase } from './supabase';
 
 const STORAGE_KEYS = {
   MEDICATIONS: 'pharmapos_medications_v1',
-  CATEGORIES: 'pharmapos_categories_v1',
   PRESCRIPTIONS: 'pharmapos_prescriptions_v1',
+  TESTS: 'pharmapos_tests_v1',
   TRANSACTIONS: 'pharmapos_transactions_v1',
   OFFLINE_QUEUE: 'pharmapos_offline_queue_v1',
   RECEIPT_SETTINGS: 'pharmapos_receipt_settings_v1',
@@ -222,69 +224,6 @@ export const storageService = {
     }
   },
 
-  // Medication Categories
-  getCategories(): string[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
-      let categories: string[] = [];
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          categories = parsed;
-        }
-      } else {
-        categories = [...DEFAULT_MEDICATION_CATEGORIES];
-      }
-
-      // Also ensure all categories from current medications and defaults exist
-      const combined = new Set<string>([...DEFAULT_MEDICATION_CATEGORIES, ...categories]);
-      const currentMeds = this.getMedications();
-      currentMeds.forEach((m) => {
-        if (m.category && typeof m.category === 'string' && m.category.trim()) {
-          combined.add(m.category.trim());
-        }
-      });
-
-      const result = Array.from(combined);
-      return result;
-    } catch (e) {
-      console.error('Failed to load categories', e);
-      return DEFAULT_MEDICATION_CATEGORIES;
-    }
-  },
-
-  saveCategories(categories: string[]): void {
-    try {
-      const unique = Array.from(
-        new Set(categories.map((c) => c.trim()).filter((c) => c.length > 0))
-      );
-      localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(unique));
-    } catch (e) {
-      console.error('Failed to save categories', e);
-    }
-  },
-
-  addCategory(newCategory: string): string[] {
-    const trimmed = newCategory.trim();
-    if (!trimmed) return this.getCategories();
-    const current = this.getCategories();
-    const exists = current.some((c) => c.toLowerCase() === trimmed.toLowerCase());
-    if (!exists) {
-      const updated = [...current, trimmed];
-      this.saveCategories(updated);
-      return updated;
-    }
-    return current;
-  },
-
-  deleteCategory(categoryName: string): string[] {
-    const trimmed = categoryName.trim();
-    const current = this.getCategories();
-    const updated = current.filter((c) => c.toLowerCase() !== trimmed.toLowerCase());
-    this.saveCategories(updated);
-    return updated;
-  },
-
   // Prescriptions
   getPrescriptions(): Prescription[] {
     try {
@@ -305,25 +244,24 @@ export const storageService = {
     }
   },
 
-  updatePrescription(updatedRx: Prescription): Prescription[] {
-    const all = this.getPrescriptions();
-    const index = all.findIndex((r) => r.id === updatedRx.id);
-    let updatedList: Prescription[];
-    if (index >= 0) {
-      updatedList = [...all];
-      updatedList[index] = updatedRx;
-    } else {
-      updatedList = [updatedRx, ...all];
+  // Clinical Tests (ordered/recorded by clinicians)
+  getTests(): MedicalTest[] {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.TESTS);
+      if (data !== null) return JSON.parse(data);
+    } catch (e) {
+      console.error('Failed to load tests from storage', e);
     }
-    this.savePrescriptions(updatedList);
-    return updatedList;
+    this.saveTests(INITIAL_TESTS);
+    return INITIAL_TESTS;
   },
 
-  deletePrescription(rxId: string): Prescription[] {
-    const all = this.getPrescriptions();
-    const updatedList = all.filter((r) => r.id !== rxId);
-    this.savePrescriptions(updatedList);
-    return updatedList;
+  saveTests(tests: MedicalTest[]): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.TESTS, JSON.stringify(tests));
+    } catch (e) {
+      console.error('Failed to save tests', e);
+    }
   },
 
   // Sales Transactions
@@ -388,7 +326,7 @@ export const storageService = {
       const data = localStorage.getItem(STORAGE_KEYS.RECEIPT_SETTINGS);
       if (data) {
         const parsed = JSON.parse(data);
-        const settings = { ...INITIAL_RECEIPT_SETTINGS, ...parsed, taxRate: 0, showTaxBreakdown: false };
+        const settings = { ...INITIAL_RECEIPT_SETTINGS, ...parsed };
         if (settings.pharmacyName === 'AfyaCare Pharmacy & Chemists' || !settings.pharmacyName) {
           settings.pharmacyName = 'RG Pharma-POS';
           this.saveReceiptSettings(settings);
@@ -444,7 +382,7 @@ export const storageService = {
       username: string;
       email?: string;
       phone?: string;
-      role: 'admin' | 'staff';
+      role: UserRole;
       password?: string;
       licenseNumber?: string;
     }
@@ -474,7 +412,7 @@ export const storageService = {
       status: 'active',
       password: userData.password || 'pharmacy123',
       licenseNumber: userData.licenseNumber?.trim() || '',
-      avatarColor: userData.role === 'admin' ? 'bg-teal-700' : 'bg-emerald-600',
+      avatarColor: userData.role === 'admin' ? 'bg-teal-700' : userData.role === 'clinician' ? 'bg-blue-600' : 'bg-emerald-600',
       createdAt: new Date().toISOString(),
     };
 
@@ -844,6 +782,7 @@ export const storageService = {
     this.saveMedications([]);
     this.saveTransactions([]);
     this.savePrescriptions([]);
+    this.saveTests([]);
     this.saveOfflineQueue([]);
     this.clearCart();
     this.clearInventoryFilters();
@@ -896,9 +835,234 @@ export const storageService = {
     localStorage.clear();
     this.saveMedications(INITIAL_MEDICATIONS);
     this.savePrescriptions(INITIAL_PRESCRIPTIONS);
+    this.saveTests(INITIAL_TESTS);
     this.saveReceiptSettings(INITIAL_RECEIPT_SETTINGS);
     this.saveUsers(DEMO_USERS);
     this.saveActiveUser(DEMO_USERS[0]);
     this.saveAuditLogs(INITIAL_AUDIT_LOGS);
   },
+
+  // ------------------------------------------------------------------
+  // Supabase cloud sync (medications, prescriptions & tests)
+  // ------------------------------------------------------------------
+  // These push local changes up to Supabase (fire-and-forget, so the
+  // offline-first local flow never blocks on network) and pull the
+  // latest cloud rows down to hydrate this device. Combined with the
+  // realtime subscription in supabase.ts, this is what keeps the
+  // admin / clinician / cashier screens in sync across devices.
+
+  async pushMedicationToCloud(m: Medication): Promise<void> {
+    const client = getSupabase();
+    if (!client) return;
+    try {
+      await client.from('medications').upsert(medicationToRow(m));
+    } catch (e) {
+      console.error('Cloud sync failed (medication upsert)', e);
+    }
+  },
+
+  async deleteMedicationFromCloud(id: string): Promise<void> {
+    const client = getSupabase();
+    if (!client) return;
+    try {
+      await client.from('medications').delete().eq('id', id);
+    } catch (e) {
+      console.error('Cloud sync failed (medication delete)', e);
+    }
+  },
+
+  async pullMedicationsFromCloud(): Promise<Medication[] | null> {
+    const client = getSupabase();
+    if (!client) return null;
+    try {
+      const { data, error } = await client.from('medications').select('*');
+      if (error || !data) return null;
+      return data.map(rowToMedication);
+    } catch (e) {
+      console.error('Cloud sync failed (medications pull)', e);
+      return null;
+    }
+  },
+
+  async pushPrescriptionToCloud(rx: Prescription): Promise<void> {
+    const client = getSupabase();
+    if (!client) return;
+    try {
+      await client.from('prescriptions').upsert(prescriptionToRow(rx));
+    } catch (e) {
+      console.error('Cloud sync failed (prescription upsert)', e);
+    }
+  },
+
+  async pullPrescriptionsFromCloud(): Promise<Prescription[] | null> {
+    const client = getSupabase();
+    if (!client) return null;
+    try {
+      const { data, error } = await client.from('prescriptions').select('*');
+      if (error || !data) return null;
+      return data.map(rowToPrescription);
+    } catch (e) {
+      console.error('Cloud sync failed (prescriptions pull)', e);
+      return null;
+    }
+  },
+
+  async pushTestToCloud(t: MedicalTest): Promise<void> {
+    const client = getSupabase();
+    if (!client) return;
+    try {
+      await client.from('tests').upsert(testToRow(t));
+    } catch (e) {
+      console.error('Cloud sync failed (test upsert)', e);
+    }
+  },
+
+  async pullTestsFromCloud(): Promise<MedicalTest[] | null> {
+    const client = getSupabase();
+    if (!client) return null;
+    try {
+      const { data, error } = await client.from('tests').select('*');
+      if (error || !data) return null;
+      return data.map(rowToTest);
+    } catch (e) {
+      console.error('Cloud sync failed (tests pull)', e);
+      return null;
+    }
+  },
 };
+
+// ------------------------------------------------------------------
+// camelCase (app) <-> snake_case (Supabase) row mappers
+// ------------------------------------------------------------------
+
+function medicationToRow(m: Medication) {
+  return {
+    id: m.id,
+    name: m.name,
+    generic_name: m.genericName,
+    dosage: m.dosage,
+    form: m.form,
+    category: m.category,
+    is_prescription_required: !!m.isPrescriptionRequired,
+    barcode: m.barcode,
+    price: m.price,
+    cost_price: m.costPrice,
+    stock: m.stock,
+    min_stock_level: m.minStockLevel,
+    batch_number: m.batchNumber,
+    expiry_date: m.expiryDate,
+    manufacturer: m.manufacturer,
+    requires_refrigeration: !!m.requiresRefrigeration,
+  };
+}
+
+function rowToMedication(r: any): Medication {
+  return {
+    id: r.id,
+    name: r.name,
+    genericName: r.generic_name,
+    dosage: r.dosage,
+    form: r.form,
+    category: r.category,
+    isPrescriptionRequired: !!r.is_prescription_required,
+    barcode: r.barcode,
+    price: Number(r.price),
+    costPrice: Number(r.cost_price),
+    stock: Number(r.stock),
+    minStockLevel: Number(r.min_stock_level),
+    batchNumber: r.batch_number,
+    expiryDate: r.expiry_date,
+    manufacturer: r.manufacturer,
+    requiresRefrigeration: !!r.requires_refrigeration,
+  };
+}
+
+function prescriptionToRow(p: Prescription) {
+  return {
+    id: p.id,
+    rx_number: p.rxNumber,
+    barcode: p.barcode,
+    patient_name: p.patientName,
+    patient_dob: p.patientDOB,
+    patient_phone: p.patientPhone,
+    doctor_name: p.doctorName,
+    doctor_license: p.doctorLicense,
+    doctor_clinic: p.doctorClinic,
+    medication_id: p.medicationId,
+    medication_name: p.medicationName,
+    dosage_instructions: p.dosageInstructions,
+    quantity_prescribed: p.quantityPrescribed,
+    quantity_dispensed_so_far: p.quantityDispensedSoFar,
+    refills_allowed: p.refillsAllowed,
+    refills_remaining: p.refillsRemaining,
+    date_issued: p.dateIssued,
+    expiry_date: p.expiryDate,
+    status: p.status,
+    insurance_provider: p.insuranceProvider || null,
+    insurance_co_pay_rate: p.insuranceCoPayRate ?? null,
+  };
+}
+
+function rowToPrescription(r: any): Prescription {
+  return {
+    id: r.id,
+    rxNumber: r.rx_number,
+    barcode: r.barcode,
+    patientName: r.patient_name,
+    patientDOB: r.patient_dob,
+    patientPhone: r.patient_phone,
+    doctorName: r.doctor_name,
+    doctorLicense: r.doctor_license,
+    doctorClinic: r.doctor_clinic,
+    medicationId: r.medication_id,
+    medicationName: r.medication_name,
+    dosageInstructions: r.dosage_instructions,
+    quantityPrescribed: Number(r.quantity_prescribed),
+    quantityDispensedSoFar: Number(r.quantity_dispensed_so_far),
+    refillsAllowed: Number(r.refills_allowed),
+    refillsRemaining: Number(r.refills_remaining),
+    dateIssued: r.date_issued,
+    expiryDate: r.expiry_date,
+    status: r.status,
+    insuranceProvider: r.insurance_provider || undefined,
+    insuranceCoPayRate: r.insurance_co_pay_rate ?? undefined,
+  };
+}
+
+function testToRow(t: MedicalTest) {
+  return {
+    id: t.id,
+    test_number: t.testNumber,
+    patient_name: t.patientName,
+    patient_dob: t.patientDOB,
+    patient_phone: t.patientPhone,
+    clinician_name: t.clinicianName,
+    clinician_license: t.clinicianLicense,
+    test_type: t.testType,
+    notes: t.notes || '',
+    date_ordered: t.dateOrdered,
+    status: t.status,
+    result_summary: t.resultSummary || null,
+    result_date: t.resultDate || null,
+    linked_prescription_id: t.linkedPrescriptionId || null,
+  };
+}
+
+function rowToTest(r: any): MedicalTest {
+  return {
+    id: r.id,
+    testNumber: r.test_number,
+    patientName: r.patient_name,
+    patientDOB: r.patient_dob,
+    patientPhone: r.patient_phone,
+    clinicianName: r.clinician_name,
+    clinicianLicense: r.clinician_license,
+    testType: r.test_type,
+    notes: r.notes || '',
+    dateOrdered: r.date_ordered,
+    status: r.status,
+    resultSummary: r.result_summary || undefined,
+    resultDate: r.result_date || undefined,
+    linkedPrescriptionId: r.linked_prescription_id || undefined,
+  };
+}

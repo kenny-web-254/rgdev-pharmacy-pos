@@ -12,7 +12,6 @@ import {
   ChevronUp,
   Download,
   Edit2,
-  FileSpreadsheet,
   Filter,
   PackagePlus,
   Pill,
@@ -24,15 +23,12 @@ import {
   ShoppingCart,
   SlidersHorizontal,
   Tag,
-  Tags,
   Trash2,
   X,
 } from 'lucide-react';
 import { ExpiryFilterPreset, InventoryFilters, Medication, MedicationCategory, UserRole } from '../types';
 import { formatKSh } from '../utils/currency';
 import { storageService } from '../services/storage';
-import { ExcelStockImportModal } from './ExcelStockImportModal';
-import { CategoryManagerModal } from './CategoryManagerModal';
 
 interface InventoryManagerProps {
   medications: Medication[];
@@ -46,11 +42,6 @@ interface InventoryManagerProps {
     newBatchNumber?: string,
     newExpiryDate?: string
   ) => void;
-  onBulkImport?: (
-    newMeds: Medication[],
-    updatedMeds: Medication[],
-    summary: { addedCount: number; updatedCount: number; totalStockAdded: number }
-  ) => void;
   onAddToCart: (medication: Medication) => void;
   userRole: UserRole;
 }
@@ -61,7 +52,6 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
   onAddMedication,
   onDeleteMedication,
   onAdjustStock,
-  onBulkImport,
   onAddToCart,
   userRole,
 }) => {
@@ -101,21 +91,16 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
     });
   }, [searchTerm, categoryFilter, supplierFilter, stockStatusFilter, expiryPreset, expiryStartDate, expiryEndDate]);
 
-  // Dynamic Categories state
-  const [categories, setCategories] = useState<string[]>(() => storageService.getCategories());
-  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
-
   // Derived available categories with item counts
   const availableCategories = useMemo(() => {
     const counts = new Map<string, number>();
-    categories.forEach((c) => counts.set(c, 0));
     medications.forEach((m) => {
       if (m.category) counts.set(m.category, (counts.get(m.category) || 0) + 1);
     });
     return Array.from(counts.entries())
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [medications, categories]);
+  }, [medications]);
 
   // Derived available suppliers/manufacturers with item counts
   const availableSuppliers = useMemo(() => {
@@ -169,7 +154,6 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
   const [addFormError, setAddFormError] = useState<string | null>(null);
   const [editFormError, setEditFormError] = useState<string | null>(null);
   const [exportSuccessMessage, setExportSuccessMessage] = useState<string | null>(null);
-  const [isExcelImportOpen, setIsExcelImportOpen] = useState(false);
 
   // New item form
   const [newMedForm, setNewMedForm] = useState<Partial<Medication>>({
@@ -727,31 +711,6 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
               </button>
 
               <button
-                type="button"
-                id="manage-categories-btn"
-                onClick={() => setIsCategoryModalOpen(true)}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold shadow-xs transition active:scale-95 cursor-pointer"
-                title="Add and manage medication categories, formularies, and drug classifications"
-              >
-                <Tags className="w-4 h-4 text-teal-700" />
-                <span>Categories</span>
-                <span className="text-[10px] bg-teal-50 text-teal-700 border border-teal-200 px-1.5 py-0.5 rounded-md font-mono font-bold">
-                  {categories.length}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                id="import-inventory-excel-btn"
-                onClick={() => setIsExcelImportOpen(true)}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold shadow-xs transition active:scale-95 cursor-pointer"
-                title="Bulk add or restock medications using an Excel spreadsheet (.xlsx, .csv)"
-              >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                <span>Import from Excel</span>
-              </button>
-
-              <button
                 id="add-medication-btn"
                 onClick={() => setIsAddModalOpen(true)}
                 className="flex items-center gap-1.5 px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-semibold shadow-xs transition active:scale-95 cursor-pointer"
@@ -1196,31 +1155,7 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-slate-400">
                     <Boxes className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                    <p className="text-sm font-medium">
-                      {medications.length === 0
-                        ? 'Inventory catalog is currently empty.'
-                        : 'No medications found matching your filter.'}
-                    </p>
-                    {medications.length === 0 && isAdmin && (
-                      <div className="mt-3 flex items-center justify-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setIsExcelImportOpen(true)}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-xs cursor-pointer"
-                        >
-                          <FileSpreadsheet className="w-4 h-4" />
-                          <span>Import Stock from Excel</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setIsAddModalOpen(true)}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold shadow-xs cursor-pointer"
-                        >
-                          <Plus className="w-4 h-4" />
-                          <span>Add Medication</span>
-                        </button>
-                      </div>
-                    )}
+                    <p className="text-sm font-medium">No medications found matching your filter.</p>
                   </td>
                 </tr>
               ) : (
@@ -1713,51 +1648,6 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Dosage Form
-                  </label>
-                  <select
-                    value={editingMedication.form}
-                    onChange={(e) => setEditingMedication({ ...editingMedication, form: e.target.value as any })}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 bg-white"
-                  >
-                    <option value="Tablet">Tablet</option>
-                    <option value="Capsule">Capsule</option>
-                    <option value="Syrup">Syrup</option>
-                    <option value="Inhaler">Inhaler</option>
-                    <option value="Injection">Injection</option>
-                    <option value="Ointment">Ointment</option>
-                    <option value="Drops">Drops</option>
-                  </select>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-semibold text-slate-700">
-                      Drug Category
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setIsCategoryModalOpen(true)}
-                      className="text-[11px] text-teal-700 hover:text-teal-900 font-semibold cursor-pointer"
-                    >
-                      + Add/Manage
-                    </button>
-                  </div>
-                  <select
-                    value={editingMedication.category}
-                    onChange={(e) => setEditingMedication({ ...editingMedication, category: e.target.value as any })}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 bg-white font-medium"
-                  >
-                    {categories.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Retail Selling Price (KSh)
                   </label>
                   <input
@@ -2175,34 +2065,6 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
           </div>
         </div>
       )}
-
-      {/* Excel Spreadsheet Stock Addition Modal */}
-      <ExcelStockImportModal
-        isOpen={isExcelImportOpen}
-        onClose={() => setIsExcelImportOpen(false)}
-        existingMedications={medications}
-        onImportComplete={(newMeds, updatedMeds, summary) => {
-          if (onBulkImport) {
-            onBulkImport(newMeds, updatedMeds, summary);
-          } else {
-            // Local fallback
-            const updatedMap = new Map<string, Medication>();
-            updatedMeds.forEach((m) => updatedMap.set(m.id, m));
-            const merged = medications.map((existing) => {
-              if (updatedMap.has(existing.id)) {
-                return updatedMap.get(existing.id)!;
-              }
-              return existing;
-            });
-            const finalList = [...newMeds, ...merged];
-            storageService.saveMedications(finalList);
-          }
-          setExportSuccessMessage(
-            `Stock Import Completed: ${summary.addedCount} new medication(s) added, ${summary.updatedCount} existing product(s) restocked (+${summary.totalStockAdded} units).`
-          );
-          setTimeout(() => setExportSuccessMessage(null), 6000);
-        }}
-      />
     </div>
   );
 };

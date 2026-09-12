@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS public.pharmacy_users (
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     name TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('admin', 'staff', 'cashier')),
+    role TEXT NOT NULL CHECK (role IN ('admin', 'clinician', 'cashier')),
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
     email TEXT,
     phone TEXT,
@@ -81,6 +81,30 @@ CREATE TABLE IF NOT EXISTS public.prescriptions (
 CREATE INDEX IF NOT EXISTS idx_prescriptions_rx_number ON public.prescriptions(rx_number);
 CREATE INDEX IF NOT EXISTS idx_prescriptions_barcode ON public.prescriptions(barcode);
 CREATE INDEX IF NOT EXISTS idx_prescriptions_patient ON public.prescriptions(patient_name);
+
+-- 4B. CLINICAL TESTS TABLE (ordered & recorded by clinicians)
+CREATE TABLE IF NOT EXISTS public.tests (
+    id TEXT PRIMARY KEY,
+    test_number TEXT UNIQUE NOT NULL,
+    patient_name TEXT NOT NULL,
+    patient_dob DATE,
+    patient_phone TEXT,
+    clinician_name TEXT NOT NULL,
+    clinician_license TEXT,
+    test_type TEXT NOT NULL,
+    notes TEXT,
+    date_ordered DATE NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Ordered' CHECK (status IN ('Ordered', 'In Progress', 'Completed', 'Cancelled')),
+    result_summary TEXT,
+    result_date DATE,
+    linked_prescription_id TEXT REFERENCES public.prescriptions(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tests_test_number ON public.tests(test_number);
+CREATE INDEX IF NOT EXISTS idx_tests_patient ON public.tests(patient_name);
+CREATE INDEX IF NOT EXISTS idx_tests_status ON public.tests(status);
 
 -- 5. SALE TRANSACTIONS TABLE
 CREATE TABLE IF NOT EXISTS public.sale_transactions (
@@ -163,6 +187,7 @@ CREATE TABLE IF NOT EXISTS public.receipt_settings (
 ALTER TABLE public.pharmacy_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.medications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prescriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.tests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sale_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.receipt_settings ENABLE ROW LEVEL SECURITY;
@@ -173,6 +198,9 @@ CREATE POLICY "Allow anon update medications" ON public.medications FOR ALL USIN
 
 CREATE POLICY "Allow anon read prescriptions" ON public.prescriptions FOR SELECT USING (true);
 CREATE POLICY "Allow anon modify prescriptions" ON public.prescriptions FOR ALL USING (true);
+
+CREATE POLICY "Allow anon read tests" ON public.tests FOR SELECT USING (true);
+CREATE POLICY "Allow anon modify tests" ON public.tests FOR ALL USING (true);
 
 CREATE POLICY "Allow anon read sales" ON public.sale_transactions FOR SELECT USING (true);
 CREATE POLICY "Allow anon insert sales" ON public.sale_transactions FOR INSERT WITH CHECK (true);
@@ -185,6 +213,31 @@ CREATE POLICY "Allow anon insert audit logs" ON public.audit_logs FOR INSERT WIT
 
 CREATE POLICY "Allow anon read settings" ON public.receipt_settings FOR SELECT USING (true);
 CREATE POLICY "Allow anon update settings" ON public.receipt_settings FOR ALL USING (true);
+
+-- 8B. REALTIME: publish medications, prescriptions & tests so connected
+-- clients (admin / clinician / cashier, on any device) get live updates.
+-- Safe to re-run; skips tables already in the publication.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'medications'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.medications;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'prescriptions'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.prescriptions;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'tests'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.tests;
+  END IF;
+END $$;
 
 -- 9. INITIAL SEED DATA (DEFAULT SETTINGS)
 INSERT INTO public.receipt_settings (

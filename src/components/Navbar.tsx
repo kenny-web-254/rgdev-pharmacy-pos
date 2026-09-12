@@ -5,6 +5,7 @@ import {
   Boxes,
   CheckCircle2,
   FileCheck,
+  FlaskConical,
   History,
   KeyRound,
   LogOut,
@@ -23,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
-import { AppNavTab, User } from '../types';
+import { AppNavTab, User, UserRole } from '../types';
 
 interface NavbarProps {
   activeTab: AppNavTab;
@@ -58,7 +59,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const isAdmin = currentUser?.role === 'admin';
-  const normalizedRole = currentUser?.role === 'cashier' ? 'staff' : (currentUser?.role || 'staff');
+  const normalizedRole = currentUser?.role || 'cashier';
 
   const handleNavClick = (tab: AppNavTab) => {
     onSelectTab(tab);
@@ -73,6 +74,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     icon: React.ReactNode;
     badge?: React.ReactNode;
     adminOnly?: boolean;
+    roles?: UserRole[]; // if set, only these roles see this item (in addition to admin, unless adminOnly)
     bottomNav?: boolean;
   }[] = [
     {
@@ -80,13 +82,22 @@ export const Navbar: React.FC<NavbarProps> = ({
       label: 'POS Checkout',
       sublabel: 'Cash, M-Pesa & Split',
       icon: <Pill className="w-5 h-5 shrink-0" />,
+      roles: ['admin', 'cashier'],
       bottomNav: true,
     },
     {
       id: 'prescriptions',
       label: 'Prescriptions (Rx)',
-      sublabel: 'Intake & verification',
+      sublabel: isAdmin || currentUser?.role === 'clinician' ? 'Write & manage prescriptions' : 'Dispense & verify',
       icon: <FileCheck className="w-5 h-5 shrink-0" />,
+      bottomNav: true,
+    },
+    {
+      id: 'tests',
+      label: 'Clinical Tests',
+      sublabel: 'Order & record results',
+      icon: <FlaskConical className="w-5 h-5 shrink-0" />,
+      roles: ['admin', 'clinician'],
       bottomNav: true,
     },
     {
@@ -106,7 +117,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     // ADMIN ONLY MODULES
     {
       id: 'users',
-      label: 'Staff Management',
+      label: 'User Management',
       sublabel: 'Roles & credentials',
       icon: <Users className="w-5 h-5 shrink-0" />,
       adminOnly: true,
@@ -142,8 +153,12 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
   ];
 
-  // Strictly filter out adminOnly items for non-admin users
-  const visibleNavItems = allNavItems.filter((item) => (item.adminOnly ? isAdmin : true));
+  // Strictly filter out adminOnly / role-restricted items for unauthorized users
+  const visibleNavItems = allNavItems.filter((item) => {
+    if (item.adminOnly) return isAdmin;
+    if (item.roles) return isAdmin || (currentUser && item.roles.includes(currentUser.role));
+    return true;
+  });
   const bottomNavItems = visibleNavItems.filter((item) => item.bottomNav);
 
   return (

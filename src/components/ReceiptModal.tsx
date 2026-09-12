@@ -60,6 +60,7 @@ ${transaction.items
   .join('\n')}
 ----------------------------------------
 Subtotal: ${formatKSh(transaction.subtotal)}
+VAT (${Math.round((settings.taxRate || 0.16) * 100)}%): ${formatKSh(transaction.tax)}
 ${transaction.discount > 0 ? `Discount: -${formatKSh(transaction.discount)}\n` : ''}TOTAL: ${formatKSh(transaction.total)}
 ${
   isPartial
@@ -273,6 +274,12 @@ ${settings.emergencyPhone}
                 <span>SUBTOTAL:</span>
                 <span>{formatKSh(transaction.subtotal)}</span>
               </div>
+              {settings.showTaxBreakdown && (
+                <div className="flex justify-between text-slate-600">
+                  <span>VAT ({Math.round((settings.taxRate || 0.16) * 100)}%):</span>
+                  <span>{formatKSh(transaction.tax)}</span>
+                </div>
+              )}
               {transaction.discount > 0 && (
                 <div className="flex justify-between text-slate-700">
                   <span>DISCOUNT / COPAY:</span>
@@ -432,6 +439,10 @@ ${settings.emergencyPhone}
             <div className="flex justify-between">
               <span>Subtotal:</span>
               <span>{formatKSh(transaction.subtotal)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>VAT ({Math.round((settings.taxRate || 0.16) * 100)}%):</span>
+              <span>{formatKSh(transaction.tax)}</span>
             </div>
             {transaction.discount > 0 && (
               <div className="flex justify-between">

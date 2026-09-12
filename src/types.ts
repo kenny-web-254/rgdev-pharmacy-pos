@@ -2,7 +2,7 @@
  * RG Pharma-POS Types & Interfaces
  */
 
-export type UserRole = 'admin' | 'staff' | 'cashier';
+export type UserRole = 'admin' | 'clinician' | 'cashier';
 
 export type UserStatus = 'active' | 'inactive';
 
@@ -24,6 +24,7 @@ export interface User {
 export type AppNavTab = 
   | 'pos' 
   | 'prescriptions' 
+  | 'tests'
   | 'inventory' 
   | 'users' 
   | 'profile' 
@@ -39,7 +40,7 @@ export interface AuditLog {
   userRole: UserRole;
   action: string;
   details: string;
-  category: 'AUTH' | 'USERS' | 'INVENTORY' | 'SALES' | 'SETTINGS' | 'SYSTEM';
+  category: 'AUTH' | 'USERS' | 'INVENTORY' | 'SALES' | 'SETTINGS' | 'SYSTEM' | 'CLINICAL';
 }
 
 export type MedicationCategory = 
@@ -50,8 +51,7 @@ export type MedicationCategory =
   | 'Gastrointestinal'
   | 'Diabetes'
   | 'OTC & First Aid'
-  | 'Vitamins & Supplements'
-  | (string & {});
+  | 'Vitamins & Supplements';
 
 export interface Medication {
   id: string;
@@ -96,6 +96,25 @@ export interface Prescription {
   status: PrescriptionStatus;
   insuranceProvider?: string;
   insuranceCoPayRate?: number; // e.g., 0.20 for 80% coverage
+}
+
+export type TestStatus = 'Ordered' | 'In Progress' | 'Completed' | 'Cancelled';
+
+export interface MedicalTest {
+  id: string;
+  testNumber: string; // e.g. "TST-40291"
+  patientName: string;
+  patientDOB: string;
+  patientPhone: string;
+  clinicianName: string; // Ordering clinician
+  clinicianLicense: string;
+  testType: string; // e.g. "Blood Glucose Panel", "Malaria RDT", "Full Blood Count"
+  notes: string; // Clinical notes / reason for test
+  dateOrdered: string;
+  status: TestStatus;
+  resultSummary?: string;
+  resultDate?: string;
+  linkedPrescriptionId?: string; // Optional follow-on prescription created from results
 }
 
 export interface CartItem {

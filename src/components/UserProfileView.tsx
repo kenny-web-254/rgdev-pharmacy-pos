@@ -45,7 +45,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
 
   const isAdmin = currentUser?.role === 'admin';
-  const normalizedRole = currentUser?.role === 'cashier' ? 'staff' : (currentUser?.role || 'staff');
+  const normalizedRole = currentUser?.role || 'cashier';
 
   // Handle Save Personal Info
   const handleSaveProfile = (e: React.FormEvent) => {

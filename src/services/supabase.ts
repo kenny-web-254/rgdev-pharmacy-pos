@@ -87,3 +87,52 @@ export async function testSupabaseConnection(): Promise<{ ok: boolean; message: 
     };
   }
 }
+
+// ------------------------------------------------------------------
+// Realtime sync
+// ------------------------------------------------------------------
+// Tables that other clients (admin/clinician/cashier on other devices)
+// can change and that should trigger a live refresh in this session.
+export type RealtimeTable = 'medications' | 'prescriptions' | 'tests' | 'sale_transactions';
+
+let activeChannel: ReturnType<SupabaseClient['channel']> | null = null;
+
+/**
+ * Subscribes to Postgres change events (INSERT/UPDATE/DELETE) on the given
+ * tables via a single Supabase Realtime channel, invoking `onChange` with
+ * the affected table name whenever a change arrives. Returns an unsubscribe
+ * function. Safe to call even when Supabase isn't configured (no-ops).
+ */
+export function subscribeToRealtimeChanges(
+  tables: RealtimeTable[],
+  onChange: (table: RealtimeTable) => void
+): () => void {
+  const client = getSupabase();
+  if (!client) {
+    return () => {};
+  }
+
+  // Tear down any previous channel before creating a new one
+  if (activeChannel) {
+    client.removeChannel(activeChannel);
+    activeChannel = null;
+  }
+
+  let channel = client.channel('pharmapos-realtime-sync');
+  for (const table of tables) {
+    channel = channel.on(
+      'postgres_changes' as any,
+      { event: '*', schema: 'public', table },
+      () => onChange(table)
+    );
+  }
+  channel.subscribe();
+  activeChannel = channel;
+
+  return () => {
+    if (activeChannel) {
+      client.removeChannel(activeChannel);
+      activeChannel = null;
+    }
+  };
+}

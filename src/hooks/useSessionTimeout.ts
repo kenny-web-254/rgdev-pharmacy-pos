@@ -1,77 +1,80 @@
 import { useEffect, useRef } from 'react';
 
 interface UseSessionTimeoutOptions {
+  /** Idle time (ms) before the session is force-logged-out. */
   timeoutMs: number;
+  /** Time (ms) before timeout at which onWarning fires, e.g. to show a toast. Optional. */
   warningMs?: number;
+  /** Whether the timer should be running at all (e.g. only while a user is logged in). */
   enabled: boolean;
   onTimeout: () => void;
   onWarning?: (msRemaining: number) => void;
 }
 
-const ACTIVITY_EVENTS: (keyof WindowEventMap)[] = ['mousedown','mousemove','keydown','wheel','touchstart','pointerdown','click'];
-const ACTIVITY_THROTTLE_MS = 1000;
+const ACTIVITY_EVENTS: (keyof WindowEventMap)[] = [
+  'mousedown',
+  'mousemove',
+  'keydown',
+  'wheel',
+  'touchstart',
+  'scroll',
+];
 
-export function useSessionTimeout({ timeoutMs, warningMs = 60_000, enabled, onTimeout, onWarning }: UseSessionTimeoutOptions) {
-  const lastActivityRef = useRef(Date.now());
+/**
+ * Tracks user activity (mouse, keyboard, touch, scroll) and calls
+ * `onTimeout` once `timeoutMs` has elapsed with no activity. Resets
+ * automatically on any activity. Used to enforce a security session
+ * timeout that logs the user out of the till/dispensary automatically.
+ */
+export function useSessionTimeout({
+  timeoutMs,
+  warningMs,
+  enabled,
+  onTimeout,
+  onWarning,
+}: UseSessionTimeoutOptions) {
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const warningRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const warnedRef = useRef(false);
-  const timeoutRef = useRef<number | null>(null);
-  const warningRef = useRef<number | null>(null);
-  const lastEventRef = useRef(0);
-  const onTimeoutRef = useRef(onTimeout);
-  const onWarningRef = useRef(onWarning);
-  onTimeoutRef.current = onTimeout;
-  onWarningRef.current = onWarning;
 
   useEffect(() => {
-    if (!enabled) return;
-    lastActivityRef.current = Date.now();
-    warnedRef.current = false;
+    if (!enabled) {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (warningRef.current) clearTimeout(warningRef.current);
+      return;
+    }
 
     const clearTimers = () => {
-      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
-      if (warningRef.current !== null) window.clearTimeout(warningRef.current);
-      timeoutRef.current = null;
-      warningRef.current = null;
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (warningRef.current) clearTimeout(warningRef.current);
     };
 
-    const schedule = () => {
+    const resetTimer = () => {
       clearTimers();
-      const idleFor = Date.now() - lastActivityRef.current;
-      const remaining = Math.max(0, timeoutMs - idleFor);
-      if (remaining <= 0) { onTimeoutRef.current(); return; }
-      if (warningMs > 0 && remaining > warningMs && onWarningRef.current && !warnedRef.current) {
-        warningRef.current = window.setTimeout(() => {
-          warnedRef.current = true;
-          const remainingAtWarning = Math.max(0, timeoutMs - (Date.now() - lastActivityRef.current));
-          onWarningRef.current?.(remainingAtWarning);
-        }, remaining - warningMs);
-      }
-      timeoutRef.current = window.setTimeout(() => {
-        const actualIdle = Date.now() - lastActivityRef.current;
-        if (actualIdle >= timeoutMs) onTimeoutRef.current(); else schedule();
-      }, remaining);
-    };
-
-    const onActivity = () => {
-      const now = Date.now();
-      if (now - lastEventRef.current < ACTIVITY_THROTTLE_MS) return;
-      lastEventRef.current = now;
-      lastActivityRef.current = now;
       warnedRef.current = false;
-      schedule();
+
+      if (warningMs && warningMs < timeoutMs && onWarning) {
+        warningRef.current = setTimeout(() => {
+          warnedRef.current = true;
+          onWarning(timeoutMs - warningMs);
+        }, timeoutMs - warningMs);
+      }
+
+      timeoutRef.current = setTimeout(() => {
+        onTimeout();
+      }, timeoutMs);
     };
 
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') schedule();
-    };
+    resetTimer();
 
-    ACTIVITY_EVENTS.forEach(evt => window.addEventListener(evt, onActivity, { passive: true }));
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    schedule();
+    ACTIVITY_EVENTS.forEach((evt) => window.addEventListener(evt, resetTimer, { passive: true }));
+    document.addEventListener('visibilitychange', resetTimer);
+
     return () => {
       clearTimers();
-      ACTIVITY_EVENTS.forEach(evt => window.removeEventListener(evt, onActivity));
-      document.removeEventListener('visibilitychange', onVisibilityChange);
+      ACTIVITY_EVENTS.forEach((evt) => window.removeEventListener(evt, resetTimer));
+      document.removeEventListener('visibilitychange', resetTimer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, timeoutMs, warningMs]);
 }

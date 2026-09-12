@@ -21,7 +21,7 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ logs, currentUser 
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
 
-  const categories = ['ALL', 'AUTH', 'USERS', 'INVENTORY', 'SALES', 'SETTINGS'];
+  const categories = ['ALL', 'AUTH', 'USERS', 'INVENTORY', 'SALES', 'CLINICAL', 'SETTINGS'];
 
   const filteredLogs = logs.filter((log) => {
     const matchesSearch =
@@ -66,6 +66,8 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ logs, currentUser 
         return 'bg-amber-100 text-amber-800 border-amber-200';
       case 'SALES':
         return 'bg-teal-100 text-teal-800 border-teal-200';
+      case 'CLINICAL':
+        return 'bg-rose-100 text-rose-800 border-rose-200';
       case 'SETTINGS':
         return 'bg-indigo-100 text-indigo-800 border-indigo-200';
       default:

@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { Navbar } from './components/Navbar';
 import { POSTerminal } from './components/POSTerminal';
 import { PrescriptionsManager } from './components/PrescriptionsManager';
+import { TestsManager } from './components/TestsManager';
 import { InventoryManager } from './components/InventoryManager';
 import { ReceiptSettingsView } from './components/ReceiptSettingsView';
 import { ReportsView } from './components/ReportsView';
@@ -18,20 +19,42 @@ import { ReceiptModal } from './components/ReceiptModal';
 import { LoginView } from './components/LoginView';
 import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
+import { useSessionTimeout } from './hooks/useSessionTimeout';
+import { useRealtimeSync } from './hooks/useRealtimeSync';
+import { supabaseConfig } from './services/supabase';
 import {
   AppNavTab,
   AuditLog,
   CartItem,
+  MedicalTest,
   Medication,
   POSTab,
   Prescription,
   ReceiptSettings,
   SaleTransaction,
   User,
+  UserRole,
 } from './types';
 import { playScanSuccessBeep } from './utils/audio';
 import { formatKSh } from './utils/currency';
 import { CheckCircle2, Info, Lock, ShieldAlert } from 'lucide-react';
+
+// Session security: auto-logout after this many minutes of inactivity, with
+// a warning toast shown shortly before the session actually ends.
+const SESSION_TIMEOUT_MINUTES = 15;
+const SESSION_WARNING_SECONDS = 60;
+
+// Role-based tab access: admin can access everything. Clinicians handle
+// tests & prescriptions but don't run the till or manage inventory/admin
+// modules. Cashiers run the till & dispense but don't order clinical tests.
+function isTabAllowedForRole(tab: AppNavTab, role: UserRole): boolean {
+  if (role === 'admin') return true;
+  const adminOnlyTabs: AppNavTab[] = ['users', 'reports', 'settings', 'audit'];
+  if (adminOnlyTabs.includes(tab)) return false;
+  if (tab === 'pos') return role === 'cashier';
+  if (tab === 'tests') return role === 'clinician';
+  return true; // prescriptions, inventory (view), profile — visible to all roles
+}
 
 export default function App() {
   // Navigation & Role State
@@ -43,6 +66,7 @@ export default function App() {
   // Core Pharmacy Data
   const [medications, setMedications] = useState<Medication[]>(() => storageService.getMedications());
   const [prescriptions, setPrescriptions] = useState<Prescription[]>(() => storageService.getPrescriptions());
+  const [tests, setTests] = useState<MedicalTest[]>(() => storageService.getTests());
   const [transactions, setTransactions] = useState<SaleTransaction[]>(() => storageService.getTransactions());
   const [offlineQueue, setOfflineQueue] = useState<SaleTransaction[]>(() => storageService.getOfflineQueue());
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(() => storageService.getReceiptSettings());
@@ -212,14 +236,94 @@ export default function App() {
     setCurrentUser(storageService.getActiveUser());
   };
 
-  // Enforce access control on tab state: non-admin cannot be on admin-only tabs
-  useEffect(() => {
-    if (currentUser && currentUser.role !== 'admin') {
-      const adminOnlyTabs: AppNavTab[] = ['users', 'reports', 'settings', 'audit'];
-      if (adminOnlyTabs.includes(activeTab)) {
-        setActiveTab('pos');
-        showToast('Access restricted: That module requires Administrator privileges.', 'warning');
+  const handleLogout = () => {
+    storageService.logoutActiveUser(currentUser);
+    setCurrentUser(null);
+    showToast('Signed out of session.', 'info');
+  };
+
+  // Security: auto-logout after a period of inactivity. Runs only while a
+  // user is signed in, and resets on any mouse/keyboard/touch/scroll activity.
+  useSessionTimeout({
+    enabled: !!currentUser,
+    timeoutMs: SESSION_TIMEOUT_MINUTES * 60 * 1000,
+    warningMs: SESSION_WARNING_SECONDS * 1000,
+    onWarning: () => showToast(`Session will expire in ${SESSION_WARNING_SECONDS}s due to inactivity...`, 'warning'),
+    onTimeout: () => {
+      if (currentUser) {
+        storageService.logoutActiveUser(currentUser);
+        setCurrentUser(null);
+        showToast('You were signed out automatically after a period of inactivity.', 'info');
       }
+    },
+  });
+
+  // Cloud hydration: when Supabase is configured, pull the latest medications,
+  // prescriptions & tests from the cloud on login so this device starts from
+  // the shared source of truth rather than stale local data.
+  useEffect(() => {
+    if (!currentUser || !supabaseConfig.isConfigured()) return;
+    (async () => {
+      const [cloudMeds, cloudRx, cloudTests] = await Promise.all([
+        storageService.pullMedicationsFromCloud(),
+        storageService.pullPrescriptionsFromCloud(),
+        storageService.pullTestsFromCloud(),
+      ]);
+      if (cloudMeds && cloudMeds.length > 0) {
+        setMedications(cloudMeds);
+        storageService.saveMedications(cloudMeds);
+      }
+      if (cloudRx) {
+        setPrescriptions(cloudRx);
+        storageService.savePrescriptions(cloudRx);
+      }
+      if (cloudTests) {
+        setTests(cloudTests);
+        storageService.saveTests(cloudTests);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id]);
+
+  // Realtime sync: live-refresh medications/prescriptions/tests when another
+  // device (a different cashier till, the clinician's tablet, admin laptop)
+  // writes a change to Supabase.
+  useRealtimeSync({
+    enabled: !!currentUser,
+    onMedicationsChanged: async () => {
+      const cloudMeds = await storageService.pullMedicationsFromCloud();
+      if (cloudMeds) {
+        setMedications(cloudMeds);
+        storageService.saveMedications(cloudMeds);
+      }
+    },
+    onPrescriptionsChanged: async () => {
+      const cloudRx = await storageService.pullPrescriptionsFromCloud();
+      if (cloudRx) {
+        setPrescriptions(cloudRx);
+        storageService.savePrescriptions(cloudRx);
+      }
+    },
+    onTestsChanged: async () => {
+      const cloudTests = await storageService.pullTestsFromCloud();
+      if (cloudTests) {
+        setTests(cloudTests);
+        storageService.saveTests(cloudTests);
+      }
+    },
+  });
+
+  // Default landing tab per role (used on login & when redirected off a restricted tab)
+  const defaultTabForRole = (role: UserRole): AppNavTab => {
+    if (role === 'clinician') return 'prescriptions';
+    return 'pos';
+  };
+
+  // Enforce access control on tab state: users cannot remain on a tab their role can't access
+  useEffect(() => {
+    if (currentUser && !isTabAllowedForRole(activeTab, currentUser.role)) {
+      setActiveTab(defaultTabForRole(currentUser.role));
+      showToast('Access restricted: That module is not available for your role.', 'warning');
     }
   }, [currentUser?.role, activeTab]);
 
@@ -293,6 +397,7 @@ export default function App() {
     const updatedList = medications.map((m) => (m.id === cleanUpdated.id ? cleanUpdated : m));
     setMedications(updatedList);
     storageService.saveMedications(updatedList);
+    storageService.pushMedicationToCloud(cleanUpdated);
 
     storageService.addAuditLog({
       userId: currentUser.id,
@@ -340,6 +445,7 @@ export default function App() {
     const updatedList = [cleanItem, ...medications];
     setMedications(updatedList);
     storageService.saveMedications(updatedList);
+    storageService.pushMedicationToCloud(cleanItem);
 
     storageService.addAuditLog({
       userId: currentUser.id,
@@ -363,6 +469,7 @@ export default function App() {
     const updatedList = medications.filter((m) => m.id !== id);
     setMedications(updatedList);
     storageService.saveMedications(updatedList);
+    storageService.deleteMedicationFromCloud(id);
     setPosTabs((prev) =>
       prev.map((t) => ({ ...t, cart: t.cart.filter((i) => i.medication.id !== id), updatedAt: Date.now() }))
     );
@@ -434,6 +541,7 @@ export default function App() {
     const updatedList = medications.map((m) => (m.id === medicationId ? updated : m));
     setMedications(updatedList);
     storageService.saveMedications(updatedList);
+    storageService.pushMedicationToCloud(updated);
 
     storageService.addAuditLog({
       userId: currentUser.id,
@@ -447,52 +555,69 @@ export default function App() {
     showToast(`Stock adjusted for ${med.name}: ${prevStock} -> ${cleanStock} (${diff >= 0 ? '+' : ''}${diff}) [Batch: ${batch}]`, 'success');
   };
 
-  const handleBulkImportMedications = (
-    newMeds: Medication[],
-    updatedMeds: Medication[],
-    summary: { addedCount: number; updatedCount: number; totalStockAdded: number }
-  ) => {
-    if (!currentUser || currentUser.role !== 'admin') {
-      showToast('Unauthorized: Only administrators can import stock.', 'warning');
+  // Prescription Management Handlers
+  const handleAddNewPrescription = (newRx: Prescription) => {
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'clinician')) {
+      showToast('Unauthorized: Only clinicians and administrators can write new prescriptions.', 'warning');
       return;
     }
-
-    const updatedMap = new Map<string, Medication>();
-    updatedMeds.forEach((m) => updatedMap.set(m.id, m));
-
-    const merged = medications.map((existing) => {
-      if (updatedMap.has(existing.id)) {
-        return updatedMap.get(existing.id)!;
-      }
-      return existing;
-    });
-
-    const finalList = [...newMeds, ...merged];
-    setMedications(finalList);
-    storageService.saveMedications(finalList);
-
+    const updated = [newRx, ...prescriptions];
+    setPrescriptions(updated);
+    storageService.savePrescriptions(updated);
+    storageService.pushPrescriptionToCloud(newRx);
     storageService.addAuditLog({
       userId: currentUser.id,
       userName: currentUser.name,
       userRole: currentUser.role,
-      action: 'BULK_STOCK_IMPORT',
-      details: `Excel Stock Import Completed: Added ${summary.addedCount} new product(s), restocked ${summary.updatedCount} existing product(s) (+${summary.totalStockAdded} total units). Verified non-negative stock and compliant batch lots.`,
-      category: 'INVENTORY',
+      action: 'PRESCRIPTION_CREATED',
+      details: `Registered prescription ${newRx.rxNumber} for ${newRx.patientName} (${newRx.medicationName})`,
+      category: 'CLINICAL',
     });
     setAuditLogs(storageService.getAuditLogs());
-
-    showToast(
-      `Excel Import Success: Added ${summary.addedCount} new medication(s), restocked ${summary.updatedCount} existing product(s).`,
-      'success'
-    );
+    showToast(`Prescription ${newRx.rxNumber} for ${newRx.patientName} registered.`, 'success');
   };
 
-  // Prescription Management Handlers
-  const handleAddNewPrescription = (newRx: Prescription) => {
-    const updated = [newRx, ...prescriptions];
-    setPrescriptions(updated);
-    storageService.savePrescriptions(updated);
-    showToast(`Prescription ${newRx.rxNumber} for ${newRx.patientName} registered.`, 'success');
+  // Clinical Test Handlers (clinician orders & records results)
+  const handleAddNewTest = (newTest: MedicalTest) => {
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'clinician')) {
+      showToast('Unauthorized: Only clinicians and administrators can order clinical tests.', 'warning');
+      return;
+    }
+    const updated = [newTest, ...tests];
+    setTests(updated);
+    storageService.saveTests(updated);
+    storageService.pushTestToCloud(newTest);
+    storageService.addAuditLog({
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'TEST_ORDERED',
+      details: `Ordered test ${newTest.testNumber} (${newTest.testType}) for ${newTest.patientName}`,
+      category: 'CLINICAL',
+    });
+    setAuditLogs(storageService.getAuditLogs());
+    showToast(`Test ${newTest.testNumber} for ${newTest.patientName} ordered.`, 'success');
+  };
+
+  const handleUpdateTest = (updatedTest: MedicalTest) => {
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'clinician')) {
+      showToast('Unauthorized: Only clinicians and administrators can record test results.', 'warning');
+      return;
+    }
+    const updated = tests.map((t) => (t.id === updatedTest.id ? updatedTest : t));
+    setTests(updated);
+    storageService.saveTests(updated);
+    storageService.pushTestToCloud(updatedTest);
+    storageService.addAuditLog({
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'TEST_UPDATED',
+      details: `Updated test ${updatedTest.testNumber} for ${updatedTest.patientName} to status "${updatedTest.status}"`,
+      category: 'CLINICAL',
+    });
+    setAuditLogs(storageService.getAuditLogs());
+    showToast(`Test ${updatedTest.testNumber} updated.`, 'success');
   };
 
   const handleDispensePrescriptionToCart = (rx: Prescription) => {
@@ -639,6 +764,9 @@ export default function App() {
     });
     setMedications(updatedMeds);
     storageService.saveMedications(updatedMeds);
+    updatedMeds
+      .filter((med) => transaction.items.some((item) => item.medicationId === med.id))
+      .forEach((med) => storageService.pushMedicationToCloud(med));
 
     // 2. Update prescription refill status if applicable
     const updatedRxs = prescriptions.map((rx) => {
@@ -656,6 +784,9 @@ export default function App() {
     });
     setPrescriptions(updatedRxs);
     storageService.savePrescriptions(updatedRxs);
+    updatedRxs
+      .filter((rx) => transaction.items.some((item) => item.rxNumber === rx.rxNumber))
+      .forEach((rx) => storageService.pushPrescriptionToCloud(rx));
 
     // 3. Persist transaction
     const newTxList = [transaction, ...transactions];
@@ -730,6 +861,7 @@ export default function App() {
     setTransactions([]);
     setOfflineQueue([]);
     setPrescriptions([]);
+    setTests([]);
     setAuditLogs(storageService.getAuditLogs());
 
     // Reset POS tabs
@@ -758,19 +890,10 @@ export default function App() {
   // Authentication & Session
   const handleLogin = (user: User) => {
     setCurrentUser(user);
-    if (user.role !== 'admin') {
-      const adminOnly: AppNavTab[] = ['users', 'reports', 'settings', 'audit'];
-      if (adminOnly.includes(activeTab)) {
-        setActiveTab('pos');
-      }
+    if (!isTabAllowedForRole(activeTab, user.role)) {
+      setActiveTab(defaultTabForRole(user.role));
     }
     showToast(`Signed into session as ${user.name}`, 'success');
-  };
-
-  const handleLogout = () => {
-    storageService.logoutActiveUser(currentUser);
-    setCurrentUser(null);
-    showToast('Signed out of session.', 'info');
   };
 
   // Low stock calculation
@@ -850,9 +973,8 @@ export default function App() {
       <Navbar
         activeTab={activeTab}
         onSelectTab={(tab) => {
-          const adminOnlyTabs: AppNavTab[] = ['users', 'reports', 'settings', 'audit'];
-          if (adminOnlyTabs.includes(tab) && currentUser.role !== 'admin') {
-            showToast('Administrator clearance required to access this module.', 'warning');
+          if (!isTabAllowedForRole(tab, currentUser.role)) {
+            showToast('That module is not available for your role.', 'warning');
             return;
           }
           setActiveTab(tab);
@@ -907,6 +1029,17 @@ export default function App() {
             />
           )}
 
+          {activeTab === 'tests' && (
+            <TestsManager
+              tests={tests}
+              onAddNewTest={handleAddNewTest}
+              onUpdateTest={handleUpdateTest}
+              userRole={currentUser.role}
+              currentUserName={currentUser.name}
+              currentUserLicense={currentUser.licenseNumber}
+            />
+          )}
+
           {activeTab === 'inventory' && (
             <InventoryManager
               medications={medications}
@@ -914,7 +1047,6 @@ export default function App() {
               onAddMedication={handleAddMedication}
               onDeleteMedication={handleDeleteMedication}
               onAdjustStock={handleAdjustStock}
-              onBulkImport={handleBulkImportMedications}
               onAddToCart={(med) => {
                 const existingIdx = activePOSTab.cart.findIndex((i) => i.medication.id === med.id);
                 let updated: CartItem[];

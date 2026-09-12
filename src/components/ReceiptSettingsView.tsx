@@ -472,7 +472,7 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
                   <div>
                     <span className="font-bold text-slate-900">Regulatory License & KRA Tax PIN:</span>
                     <p className="text-slate-700 font-mono">
-                      License: {formData.licenseNumber} | PIN: {formData.taxId}
+                      License: {formData.licenseNumber} | Tax PIN: {formData.taxId} (VAT: {Math.round(formData.taxRate * 100)}%)
                     </p>
                   </div>
                 </div>
@@ -891,13 +891,20 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
                   </select>
                 </div>
 
-                <div className="p-3 rounded-xl bg-teal-50/60 border border-teal-200/80">
-                  <span className="block text-xs font-bold text-teal-950 mb-0.5">
-                    Tax Policy: Tax-Inclusive Pricing
-                  </span>
-                  <p className="text-[11px] text-teal-700">
-                    Shelf prices are 100% tax-inclusive. Tax charged to the customer is KSh 0.00 with zero additional VAT added at POS checkout.
-                  </p>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Sales Tax Rate (% decimal, e.g. 0.06 = 6%)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.005"
+                    min="0"
+                    max="0.30"
+                    disabled={!isAdmin}
+                    value={formData.taxRate}
+                    onChange={(e) => handleChange('taxRate', parseFloat(e.target.value) || 0)}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 disabled:bg-slate-100"
+                  />
                 </div>
               </div>
             </div>
@@ -1036,6 +1043,20 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
                   <div>
                     <span className="font-semibold text-slate-800 block">Print Bottom Barcode</span>
                     <span className="text-[11px] text-slate-500">Includes scannable transaction barcode</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center gap-2.5 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    disabled={!isAdmin}
+                    checked={formData.showTaxBreakdown}
+                    onChange={(e) => handleChange('showTaxBreakdown', e.target.checked)}
+                    className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
+                  />
+                  <div>
+                    <span className="font-semibold text-slate-800 block">Tax Breakdown</span>
+                    <span className="text-[11px] text-slate-500">Shows subtotal and tax percentage</span>
                   </div>
                 </label>
               </div>
@@ -1208,9 +1229,15 @@ export const ReceiptSettingsView: React.FC<ReceiptSettingsViewProps> = ({
                   <span>SUBTOTAL:</span>
                   <span>KSh 2,725.00</span>
                 </div>
+                {formData.showTaxBreakdown && (
+                  <div className="flex justify-between text-slate-600">
+                    <span>TAX ({Math.round(formData.taxRate * 100)}%):</span>
+                    <span>KSh {(2725 * formData.taxRate).toFixed(2)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between font-bold text-sm pt-1 border-t border-slate-300">
                   <span>TOTAL:</span>
-                  <span>KSh 2,725.00</span>
+                  <span>KSh {(2725 * (1 + formData.taxRate)).toFixed(2)}</span>
                 </div>
               </div>
 

@@ -36,8 +36,19 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   onShowToast,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'staff'>('all');
+  const [roleFilter, setRoleFilter] = useState<'all' | UserRole>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+
+  // Role display helpers (admin / clinician / cashier)
+  const roleBadgeClass = (role: UserRole) =>
+    role === 'admin'
+      ? 'bg-purple-100 text-purple-800 border border-purple-200'
+      : role === 'clinician'
+      ? 'bg-blue-100 text-blue-800 border border-blue-200'
+      : 'bg-emerald-100 text-emerald-800 border border-emerald-200';
+
+  const roleAvatarClass = (role: UserRole) =>
+    role === 'admin' ? 'bg-teal-700' : role === 'clinician' ? 'bg-blue-600' : 'bg-emerald-600';
 
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -51,7 +62,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const [newUsername, setNewUsername] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPhone, setNewPhone] = useState('');
-  const [newRole, setNewRole] = useState<'staff' | 'admin'>('staff');
+  const [newRole, setNewRole] = useState<UserRole>('cashier');
   const [newPassword, setNewPassword] = useState('');
   const [newLicense, setNewLicense] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
@@ -71,8 +82,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
       (u.phone && u.phone.includes(searchTerm));
 
     if (!matchesSearch) return false;
-    const normalizedRole = u.role === 'cashier' ? 'staff' : u.role;
-    if (roleFilter !== 'all' && normalizedRole !== roleFilter) return false;
+    if (roleFilter !== 'all' && u.role !== roleFilter) return false;
     if (statusFilter !== 'all' && u.status !== statusFilter) return false;
     return true;
   });
@@ -109,7 +119,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     setNewUsername('');
     setNewEmail('');
     setNewPhone('');
-    setNewRole('staff');
+    setNewRole('cashier');
     setNewPassword('');
     setNewLicense('');
     onRefreshUsers();
@@ -126,7 +136,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
       email: editingUser.email,
       phone: editingUser.phone,
       licenseNumber: editingUser.licenseNumber,
-      role: editingUser.role === 'cashier' ? 'staff' : editingUser.role,
+      role: editingUser.role,
       status: editingUser.status,
     });
 
@@ -261,12 +271,20 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
               Admins
             </button>
             <button
-              onClick={() => setRoleFilter('staff')}
+              onClick={() => setRoleFilter('clinician')}
               className={`px-3 py-1.5 rounded-lg transition ${
-                roleFilter === 'staff' ? 'bg-emerald-700 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                roleFilter === 'clinician' ? 'bg-blue-700 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Staff
+              Clinicians
+            </button>
+            <button
+              onClick={() => setRoleFilter('cashier')}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                roleFilter === 'cashier' ? 'bg-emerald-700 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Cashiers
             </button>
           </div>
 
@@ -311,7 +329,6 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         ) : (
           filteredUsers.map((user) => {
             const isSelf = user.id === currentUser.id;
-            const normalizedRole = user.role === 'cashier' ? 'staff' : user.role;
             const isActive = user.status === 'active';
 
             return (
@@ -323,7 +340,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                   <div className="flex items-center gap-3">
                     <div
                       className={`w-11 h-11 rounded-xl flex items-center justify-center text-white font-bold text-base shadow-xs shrink-0 ${
-                        user.avatarColor || (normalizedRole === 'admin' ? 'bg-teal-700' : 'bg-emerald-600')
+                        user.avatarColor || roleAvatarClass(user.role)
                       }`}
                     >
                       {user.name.charAt(0)}
@@ -343,13 +360,11 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
 
                   <div className="flex flex-col items-end gap-1">
                     <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
-                        normalizedRole === 'admin'
-                          ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                          : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                      }`}
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${roleBadgeClass(
+                        user.role
+                      )}`}
                     >
-                      {normalizedRole}
+                      {user.role}
                     </span>
                     <span
                       className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${
@@ -469,7 +484,6 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
               ) : (
                 filteredUsers.map((user) => {
                   const isSelf = user.id === currentUser.id;
-                  const normalizedRole = user.role === 'cashier' ? 'staff' : user.role;
                   const isActive = user.status === 'active';
 
                   return (
@@ -478,7 +492,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                         <div className="flex items-center gap-3">
                           <div
                             className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-bold text-sm shadow-xs shrink-0 ${
-                              user.avatarColor || (normalizedRole === 'admin' ? 'bg-teal-700' : 'bg-emerald-600')
+                              user.avatarColor || roleAvatarClass(user.role)
                             }`}
                           >
                             {user.name.charAt(0)}
@@ -510,14 +524,12 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
 
                       <td className="py-4 px-4">
                         <span
-                          className={`text-[11px] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-wider inline-flex items-center gap-1 ${
-                            normalizedRole === 'admin'
-                              ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                              : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                          }`}
+                          className={`text-[11px] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-wider inline-flex items-center gap-1 ${roleBadgeClass(
+                            user.role
+                          )}`}
                         >
                           <Shield className="w-3 h-3" />
-                          {normalizedRole}
+                          {user.role}
                         </span>
                       </td>
 
@@ -709,22 +721,40 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">Role Permission Level</label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <button
                     type="button"
-                    onClick={() => setNewRole('staff')}
+                    onClick={() => setNewRole('cashier')}
                     className={`p-3 rounded-xl border-2 text-left transition ${
-                      newRole === 'staff'
-                        ? 'border-teal-700 bg-teal-50/50'
+                      newRole === 'cashier'
+                        ? 'border-emerald-700 bg-emerald-50/50'
                         : 'border-slate-200 hover:border-slate-300'
                     }`}
                   >
                     <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900">
-                      <Shield className="w-3.5 h-3.5 text-teal-700" />
-                      <span>STAFF</span>
+                      <Shield className="w-3.5 h-3.5 text-emerald-700" />
+                      <span>CASHIER</span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      POS sales, Rx verification, product viewing
+                      POS checkout, Rx dispensing, product viewing
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setNewRole('clinician')}
+                    className={`p-3 rounded-xl border-2 text-left transition ${
+                      newRole === 'clinician'
+                        ? 'border-blue-700 bg-blue-50/50'
+                        : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs text-slate-900">
+                      <Shield className="w-3.5 h-3.5 text-blue-700" />
+                      <span>CLINICIAN</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Orders tests, writes prescriptions
                     </p>
                   </button>
 
@@ -846,13 +876,14 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                     </div>
                   ) : (
                     <select
-                      value={editingUser.role === 'cashier' ? 'staff' : editingUser.role}
+                      value={editingUser.role}
                       onChange={(e) =>
-                        setEditingUser({ ...editingUser, role: e.target.value as 'admin' | 'staff' })
+                        setEditingUser({ ...editingUser, role: e.target.value as UserRole })
                       }
                       className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-600 outline-none bg-white font-semibold"
                     >
-                      <option value="staff">STAFF (POS & Inventory View)</option>
+                      <option value="cashier">CASHIER (POS checkout & Rx dispensing)</option>
+                      <option value="clinician">CLINICIAN (Tests & Prescriptions)</option>
                       <option value="admin">ADMIN (Full System Management)</option>
                     </select>
                   )}

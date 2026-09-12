@@ -1,4 +1,4 @@
-import { AuditLog, Medication, Prescription, ReceiptSettings, SaleTransaction, User } from '../types';
+import { AuditLog, MedicalTest, Medication, Prescription, ReceiptSettings, SaleTransaction, User } from '../types';
 
 export const DEMO_USERS: User[] = [
   {
@@ -19,7 +19,7 @@ export const DEMO_USERS: User[] = [
     id: 'user-cashier',
     username: 'cashier',
     name: 'Marcus Vance, CPhT',
-    role: 'staff',
+    role: 'cashier',
     status: 'active',
     email: 'marcus.vance@afyacare.co.ke',
     phone: '+254 722 890 123',
@@ -30,15 +30,15 @@ export const DEMO_USERS: User[] = [
     lastLogin: '2026-09-08T08:45:00.000Z',
   },
   {
-    id: 'user-staff-2',
-    username: 'amina',
-    name: 'Amina Mohamed',
-    role: 'staff',
+    id: 'user-clinician-1',
+    username: 'clinician',
+    name: 'Dr. Amina Mohamed, MBChB',
+    role: 'clinician',
     status: 'active',
     email: 'amina.mohamed@afyacare.co.ke',
     phone: '+254 733 445 901',
-    password: 'staff',
-    licenseNumber: 'PPB-TECH-12405',
+    password: 'clinician',
+    licenseNumber: 'PPB-MED-12405',
     avatarColor: 'bg-blue-600',
     createdAt: '2025-03-14T11:20:00.000Z',
     lastLogin: '2026-09-07T17:10:00.000Z',
@@ -47,7 +47,7 @@ export const DEMO_USERS: User[] = [
     id: 'user-staff-3',
     username: 'joseph',
     name: 'Joseph Ochieng',
-    role: 'staff',
+    role: 'cashier',
     status: 'inactive',
     email: 'joseph.ochieng@afyacare.co.ke',
     phone: '+254 744 556 789',
@@ -85,7 +85,7 @@ export const INITIAL_AUDIT_LOGS: AuditLog[] = [
     timestamp: '2026-09-08T08:45:00.000Z',
     userId: 'user-cashier',
     userName: 'Marcus Vance, CPhT',
-    userRole: 'staff',
+    userRole: 'cashier',
     action: 'USER_LOGIN',
     details: 'Staff member authenticated on Counter 1',
     category: 'AUTH',
@@ -95,7 +95,7 @@ export const INITIAL_AUDIT_LOGS: AuditLog[] = [
     timestamp: '2026-09-08T08:52:00.000Z',
     userId: 'user-cashier',
     userName: 'Marcus Vance, CPhT',
-    userRole: 'staff',
+    userRole: 'cashier',
     action: 'SALE_COMPLETED',
     details: 'Completed Sale REC-491024 totaling KSh 1,450.00 via M-Pesa (QA89210492)',
     category: 'SALES',
@@ -124,7 +124,7 @@ export const INITIAL_RECEIPT_SETTINGS: ReceiptSettings = {
   email: 'dispensary@rgpharmapos.co.ke',
   licenseNumber: 'PPB Lic: PPB/RET/2026/0891 • KPA Reg: 4421',
   taxId: 'KRA PIN: P051982736Z',
-  taxRate: 0, // Prices are tax-inclusive (0% extra tax to customer)
+  taxRate: 0.16, // 16% VAT
   paperWidth: '80mm',
   headerMessage: 'Karibu RG Pharma-POS! Thank you for trusting us with your health.',
   footerMessage: 'Take all medications strictly as directed by your physician or pharmacist.',
@@ -138,17 +138,6 @@ export const INITIAL_RECEIPT_SETTINGS: ReceiptSettings = {
   showTaxBreakdown: true,
   currencySymbol: 'KSh',
 };
-
-export const DEFAULT_MEDICATION_CATEGORIES: string[] = [
-  'Antibiotics',
-  'Cardiovascular',
-  'Pain & Analgesics',
-  'Respiratory',
-  'Gastrointestinal',
-  'Diabetes',
-  'OTC & First Aid',
-  'Vitamins & Supplements',
-];
 
 export const INITIAL_MEDICATIONS: Medication[] = [
   {
@@ -450,6 +439,37 @@ export const INITIAL_PRESCRIPTIONS: Prescription[] = [
     status: 'Dispensed',
     insuranceProvider: 'Kaiser Permanente',
     insuranceCoPayRate: 0.00, // 100% covered
+  },
+];
+
+export const INITIAL_TESTS: MedicalTest[] = [
+  {
+    id: 'test-1',
+    testNumber: 'TST-40291',
+    patientName: 'Eleanor Vance',
+    patientDOB: '1968-05-14',
+    patientPhone: '(555) 439-0192',
+    clinicianName: 'Dr. Amina Mohamed, MBChB',
+    clinicianLicense: 'PPB-MED-12405',
+    testType: 'Blood Glucose Panel',
+    notes: 'Routine diabetes monitoring follow-up.',
+    dateOrdered: '2026-09-08',
+    status: 'Completed',
+    resultSummary: 'Fasting glucose 5.6 mmol/L — within normal range.',
+    resultDate: '2026-09-08',
+  },
+  {
+    id: 'test-2',
+    testNumber: 'TST-40317',
+    patientName: 'Robert Langdon',
+    patientDOB: '1974-11-22',
+    patientPhone: '(555) 819-2041',
+    clinicianName: 'Dr. Amina Mohamed, MBChB',
+    clinicianLicense: 'PPB-MED-12405',
+    testType: 'Lipid Profile',
+    notes: 'Cardiovascular risk assessment before statin renewal.',
+    dateOrdered: '2026-09-09',
+    status: 'Ordered',
   },
 ];
 

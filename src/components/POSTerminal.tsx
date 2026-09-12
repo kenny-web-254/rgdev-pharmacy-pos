@@ -462,8 +462,9 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   }, 0);
 
   const cartDiscount = (subtotal * discountPercent) / 100;
-  const total = Math.round(Math.max(0, subtotal - cartDiscount) * 100) / 100;
-  const tax = 0; // Prices are tax-inclusive; tax charged to customer is 0
+  const taxableAmount = Math.max(0, subtotal - cartDiscount);
+  const tax = taxableAmount * (receiptSettings.taxRate || 0.16);
+  const total = Math.round((taxableAmount + tax) * 100) / 100;
 
   // Change calculations depending on payment method
   let changeDue = 0;
@@ -1379,6 +1380,10 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
             <div className="flex justify-between">
               <span>Subtotal:</span>
               <span className="font-semibold text-slate-800">{formatKSh(subtotal)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>VAT ({Math.round((receiptSettings.taxRate || 0.16) * 100)}%):</span>
+              <span className="font-semibold text-slate-800">{formatKSh(tax)}</span>
             </div>
             {cartDiscount > 0 && (
               <div className="flex justify-between text-emerald-700 font-medium">

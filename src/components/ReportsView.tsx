@@ -46,7 +46,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
   // Metrics
   const totalRevenue = transactions.reduce((acc, t) => acc + t.total, 0);
-  const totalTaxCollected = transactions.reduce((acc, t) => acc + t.tax, 0);
+  const averageTransactionValue = transactions.length > 0 ? totalRevenue / transactions.length : 0;
   const totalPrescriptionsDispensed = transactions.reduce(
     (acc, t) => acc + t.items.filter((i) => i.isPrescription).length,
     0
@@ -75,14 +75,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       return;
     }
 
-    const headers = ['Receipt #', 'Date', 'Cashier', 'Payment Method', 'Subtotal (KSh)', 'Tax (KSh)', 'Total (KSh)', 'Status'];
+    const headers = ['Receipt #', 'Date', 'Cashier', 'Payment Method', 'Subtotal (KSh)', 'Discount (KSh)', 'Total (KSh)', 'Status'];
     const rows = transactions.map((t) => [
       t.receiptNumber,
       new Date(t.timestamp).toLocaleString(),
       t.cashierName,
       t.paymentMethod,
       t.subtotal.toFixed(2),
-      t.tax.toFixed(2),
+      (t.discount || 0).toFixed(2),
       t.total.toFixed(2),
       t.isOffline ? 'Offline Queued' : 'Synced',
     ]);
@@ -245,12 +245,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             </div>
 
             <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-              <span className="text-xs text-slate-500 font-semibold uppercase">Sales Tax Remitted (VAT)</span>
+              <span className="text-xs text-slate-500 font-semibold uppercase">Avg Transaction Value</span>
               <div className="text-2xl font-extrabold text-slate-900 mt-1 font-mono">
-                {formatKSh(totalTaxCollected)}
+                {formatKSh(averageTransactionValue)}
               </div>
               <div className="text-[11px] text-slate-500 mt-1">
-                KRA 16% standard VAT
+                Prices are 100% tax-inclusive
               </div>
             </div>
           </div>

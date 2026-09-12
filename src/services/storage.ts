@@ -12,6 +12,7 @@ import {
 } from '../types';
 import {
   DEMO_USERS,
+  DEFAULT_MEDICATION_CATEGORIES,
   INITIAL_AUDIT_LOGS,
   INITIAL_MEDICATIONS,
   INITIAL_PRESCRIPTIONS,
@@ -21,6 +22,7 @@ import {
 
 const STORAGE_KEYS = {
   MEDICATIONS: 'pharmapos_medications_v1',
+  CATEGORIES: 'pharmapos_categories_v1',
   PRESCRIPTIONS: 'pharmapos_prescriptions_v1',
   TRANSACTIONS: 'pharmapos_transactions_v1',
   OFFLINE_QUEUE: 'pharmapos_offline_queue_v1',
@@ -220,6 +222,69 @@ export const storageService = {
     }
   },
 
+  // Medication Categories
+  getCategories(): string[] {
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
+      let categories: string[] = [];
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          categories = parsed;
+        }
+      } else {
+        categories = [...DEFAULT_MEDICATION_CATEGORIES];
+      }
+
+      // Also ensure all categories from current medications and defaults exist
+      const combined = new Set<string>([...DEFAULT_MEDICATION_CATEGORIES, ...categories]);
+      const currentMeds = this.getMedications();
+      currentMeds.forEach((m) => {
+        if (m.category && typeof m.category === 'string' && m.category.trim()) {
+          combined.add(m.category.trim());
+        }
+      });
+
+      const result = Array.from(combined);
+      return result;
+    } catch (e) {
+      console.error('Failed to load categories', e);
+      return DEFAULT_MEDICATION_CATEGORIES;
+    }
+  },
+
+  saveCategories(categories: string[]): void {
+    try {
+      const unique = Array.from(
+        new Set(categories.map((c) => c.trim()).filter((c) => c.length > 0))
+      );
+      localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(unique));
+    } catch (e) {
+      console.error('Failed to save categories', e);
+    }
+  },
+
+  addCategory(newCategory: string): string[] {
+    const trimmed = newCategory.trim();
+    if (!trimmed) return this.getCategories();
+    const current = this.getCategories();
+    const exists = current.some((c) => c.toLowerCase() === trimmed.toLowerCase());
+    if (!exists) {
+      const updated = [...current, trimmed];
+      this.saveCategories(updated);
+      return updated;
+    }
+    return current;
+  },
+
+  deleteCategory(categoryName: string): string[] {
+    const trimmed = categoryName.trim();
+    const current = this.getCategories();
+    const updated = current.filter((c) => c.toLowerCase() !== trimmed.toLowerCase());
+    this.saveCategories(updated);
+    return updated;
+  },
+
   // Prescriptions
   getPrescriptions(): Prescription[] {
     try {
@@ -238,6 +303,27 @@ export const storageService = {
     } catch (e) {
       console.error('Failed to save prescriptions', e);
     }
+  },
+
+  updatePrescription(updatedRx: Prescription): Prescription[] {
+    const all = this.getPrescriptions();
+    const index = all.findIndex((r) => r.id === updatedRx.id);
+    let updatedList: Prescription[];
+    if (index >= 0) {
+      updatedList = [...all];
+      updatedList[index] = updatedRx;
+    } else {
+      updatedList = [updatedRx, ...all];
+    }
+    this.savePrescriptions(updatedList);
+    return updatedList;
+  },
+
+  deletePrescription(rxId: string): Prescription[] {
+    const all = this.getPrescriptions();
+    const updatedList = all.filter((r) => r.id !== rxId);
+    this.savePrescriptions(updatedList);
+    return updatedList;
   },
 
   // Sales Transactions
@@ -302,7 +388,7 @@ export const storageService = {
       const data = localStorage.getItem(STORAGE_KEYS.RECEIPT_SETTINGS);
       if (data) {
         const parsed = JSON.parse(data);
-        const settings = { ...INITIAL_RECEIPT_SETTINGS, ...parsed };
+        const settings = { ...INITIAL_RECEIPT_SETTINGS, ...parsed, taxRate: 0, showTaxBreakdown: false };
         if (settings.pharmacyName === 'AfyaCare Pharmacy & Chemists' || !settings.pharmacyName) {
           settings.pharmacyName = 'RG Pharma-POS';
           this.saveReceiptSettings(settings);

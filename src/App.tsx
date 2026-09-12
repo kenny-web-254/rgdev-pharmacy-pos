@@ -447,6 +447,46 @@ export default function App() {
     showToast(`Stock adjusted for ${med.name}: ${prevStock} -> ${cleanStock} (${diff >= 0 ? '+' : ''}${diff}) [Batch: ${batch}]`, 'success');
   };
 
+  const handleBulkImportMedications = (
+    newMeds: Medication[],
+    updatedMeds: Medication[],
+    summary: { addedCount: number; updatedCount: number; totalStockAdded: number }
+  ) => {
+    if (!currentUser || currentUser.role !== 'admin') {
+      showToast('Unauthorized: Only administrators can import stock.', 'warning');
+      return;
+    }
+
+    const updatedMap = new Map<string, Medication>();
+    updatedMeds.forEach((m) => updatedMap.set(m.id, m));
+
+    const merged = medications.map((existing) => {
+      if (updatedMap.has(existing.id)) {
+        return updatedMap.get(existing.id)!;
+      }
+      return existing;
+    });
+
+    const finalList = [...newMeds, ...merged];
+    setMedications(finalList);
+    storageService.saveMedications(finalList);
+
+    storageService.addAuditLog({
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userRole: currentUser.role,
+      action: 'BULK_STOCK_IMPORT',
+      details: `Excel Stock Import Completed: Added ${summary.addedCount} new product(s), restocked ${summary.updatedCount} existing product(s) (+${summary.totalStockAdded} total units). Verified non-negative stock and compliant batch lots.`,
+      category: 'INVENTORY',
+    });
+    setAuditLogs(storageService.getAuditLogs());
+
+    showToast(
+      `Excel Import Success: Added ${summary.addedCount} new medication(s), restocked ${summary.updatedCount} existing product(s).`,
+      'success'
+    );
+  };
+
   // Prescription Management Handlers
   const handleAddNewPrescription = (newRx: Prescription) => {
     const updated = [newRx, ...prescriptions];
@@ -874,6 +914,7 @@ export default function App() {
               onAddMedication={handleAddMedication}
               onDeleteMedication={handleDeleteMedication}
               onAdjustStock={handleAdjustStock}
+              onBulkImport={handleBulkImportMedications}
               onAddToCart={(med) => {
                 const existingIdx = activePOSTab.cart.findIndex((i) => i.medication.id === med.id);
                 let updated: CartItem[];

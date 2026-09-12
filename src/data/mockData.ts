@@ -124,7 +124,7 @@ export const INITIAL_RECEIPT_SETTINGS: ReceiptSettings = {
   email: 'dispensary@rgpharmapos.co.ke',
   licenseNumber: 'PPB Lic: PPB/RET/2026/0891 • KPA Reg: 4421',
   taxId: 'KRA PIN: P051982736Z',
-  taxRate: 0.16, // 16% VAT
+  taxRate: 0, // Prices are tax-inclusive (0% extra tax to customer)
   paperWidth: '80mm',
   headerMessage: 'Karibu RG Pharma-POS! Thank you for trusting us with your health.',
   footerMessage: 'Take all medications strictly as directed by your physician or pharmacist.',
@@ -138,6 +138,17 @@ export const INITIAL_RECEIPT_SETTINGS: ReceiptSettings = {
   showTaxBreakdown: true,
   currencySymbol: 'KSh',
 };
+
+export const DEFAULT_MEDICATION_CATEGORIES: string[] = [
+  'Antibiotics',
+  'Cardiovascular',
+  'Pain & Analgesics',
+  'Respiratory',
+  'Gastrointestinal',
+  'Diabetes',
+  'OTC & First Aid',
+  'Vitamins & Supplements',
+];
 
 export const INITIAL_MEDICATIONS: Medication[] = [
   {

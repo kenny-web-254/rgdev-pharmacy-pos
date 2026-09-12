@@ -50,7 +50,8 @@ export type MedicationCategory =
   | 'Gastrointestinal'
   | 'Diabetes'
   | 'OTC & First Aid'
-  | 'Vitamins & Supplements';
+  | 'Vitamins & Supplements'
+  | (string & {});
 
 export interface Medication {
   id: string;

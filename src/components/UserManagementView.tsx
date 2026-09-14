@@ -1,107 +1,29 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Search, UserPlus, ShieldCheck, UserCheck, UserX, KeyRound, Trash2, X } from 'lucide-react';
 import { User, UserRole } from '../types';
-import { createManagedUser, updateManagedUser, setManagedUserStatus, resetManagedUserPassword, deleteManagedUser } from '../services/supabase';
-
-interface Props {
-  currentUser: User;
-  users: User[];
-  onRefreshUsers: () => void;
-  onShowToast: (message: string, type: 'success' | 'warning' | 'info') => void;
-}
-
-export const UserManagementView: React.FC<Props> = ({ currentUser, users, onRefreshUsers, onShowToast }) => {
-  const [search, setSearch] = useState('');
-  const [role, setRole] = useState<'all' | UserRole>('all');
-  const [status, setStatus] = useState<'all' | 'active' | 'inactive'>('all');
-  const [modal, setModal] = useState<'create' | 'edit' | 'password' | 'delete' | null>(null);
-  const [target, setTarget] = useState<User | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [form, setForm] = useState({ name: '', username: '', email: '', phone: '', role: 'cashier' as UserRole, password: '', licenseNumber: '' });
-  const [newPassword, setNewPassword] = useState('');
-  const [deleteText, setDeleteText] = useState('');
-
-  const visible = users.filter(u => {
-    const q = search.toLowerCase();
-    return (!q || u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (u.phone || '').includes(q))
-      && (role === 'all' || u.role === role) && (status === 'all' || u.status === status);
-  });
-
-  const close = () => { setModal(null); setTarget(null); setError(''); setBusy(false); setNewPassword(''); setDeleteText(''); };
-  const openCreate = () => { setForm({ name: '', username: '', email: '', phone: '', role: 'cashier', password: '', licenseNumber: '' }); setError(''); setModal('create'); };
-  const openEdit = (u: User) => { setTarget(u); setForm({ name: u.name, username: u.username, email: u.email || '', phone: u.phone || '', role: u.role, password: '', licenseNumber: u.licenseNumber || '' }); setError(''); setModal('edit'); };
-
-  const create = async (e: React.FormEvent) => {
-    e.preventDefault(); setError('');
-    if (!form.name.trim() || !form.username.trim() || !form.email.trim() || !form.password) { setError('Name, username, email and password are required.'); return; }
-    if (form.password.length < 8) { setError('Password must be at least 8 characters.'); return; }
-    setBusy(true);
-    const res = await createManagedUser(form);
-    setBusy(false);
-    if (!res.ok) { setError(res.error || 'Unable to create account.'); return; }
-    onShowToast(`Created ${form.role} account for ${form.name}.`, 'success'); close(); onRefreshUsers();
-  };
-
-  const edit = async (e: React.FormEvent) => {
-    e.preventDefault(); if (!target) return; setError(''); setBusy(true);
-    const res = await updateManagedUser(target.id, { name: form.name, email: form.email, phone: form.phone, role: form.role, licenseNumber: form.licenseNumber });
-    setBusy(false);
-    if (!res.ok) { setError(res.error || 'Unable to update account.'); return; }
-    onShowToast(`Updated ${target.name}.`, 'success'); close(); onRefreshUsers();
-  };
-
-  const toggle = async (u: User) => {
-    if (u.id === currentUser.id) { onShowToast('You cannot deactivate your own administrator account.', 'warning'); return; }
-    setBusy(true); const next = u.status === 'active' ? 'inactive' : 'active';
-    const res = await setManagedUserStatus(u.id, next); setBusy(false);
-    if (!res.ok) onShowToast(res.error || 'Unable to change account status.', 'warning');
-    else { onShowToast(`${u.name} is now ${next}.`, 'info'); onRefreshUsers(); }
-  };
-
-  const password = async (e: React.FormEvent) => {
-    e.preventDefault(); if (!target) return;
-    if (newPassword.length < 8) { setError('Password must be at least 8 characters.'); return; }
-    setBusy(true); const res = await resetManagedUserPassword(target.id, newPassword); setBusy(false);
-    if (!res.ok) { setError(res.error || 'Unable to reset password.'); return; }
-    onShowToast(`Password reset for ${target.name}.`, 'success'); close();
-  };
-
-  const remove = async () => {
-    if (!target || deleteText !== 'DELETE') return;
-    if (target.id === currentUser.id) { setError('You cannot delete your own account.'); return; }
-    setBusy(true); const res = await deleteManagedUser(target.id); setBusy(false);
-    if (!res.ok) { setError(res.error || 'Unable to delete account.'); return; }
-    onShowToast(`Deleted ${target.name}.`, 'info'); close(); onRefreshUsers();
-  };
-
-  return <div className="space-y-6">
-    <div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-      <div><div className="flex items-center gap-2 mb-1"><span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-100 text-teal-800 uppercase">Admin Access</span><span className="text-xs text-slate-500">• {users.length} accounts</span></div><h1 className="text-2xl font-black text-slate-900">User & Role Management</h1><p className="text-sm text-slate-500 mt-1">Accounts are created and secured through Supabase Auth. Passwords never enter the browser database.</p></div>
-      <button onClick={openCreate} className="flex items-center justify-center gap-2 bg-teal-700 hover:bg-teal-800 text-white px-5 py-3 rounded-2xl text-sm font-bold min-h-[44px]"><UserPlus className="w-4 h-4"/>New User</button>
-    </div>
-
-    <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col md:flex-row gap-3">
-      <div className="relative flex-1"><Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, username, email or phone" className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-teal-600"/></div>
-      <select value={role} onChange={e=>setRole(e.target.value as any)} className="px-3 py-2 border rounded-xl"><option value="all">All roles</option><option value="admin">Admins</option><option value="clinician">Clinicians</option><option value="cashier">Cashiers</option></select>
-      <select value={status} onChange={e=>setStatus(e.target.value as any)} className="px-3 py-2 border rounded-xl"><option value="all">All status</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
-    </div>
-
-    <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="text-left p-4">User</th><th className="text-left p-4">Role</th><th className="text-left p-4">Status</th><th className="text-left p-4">Last login</th><th className="text-right p-4">Actions</th></tr></thead><tbody>{visible.map(u => <tr key={u.id} className="border-t border-slate-100"><td className="p-4"><div className="font-bold">{u.name}{u.id===currentUser.id && <span className="ml-2 text-[10px] bg-teal-50 text-teal-700 px-2 py-1 rounded">YOU</span>}</div><div className="text-xs text-slate-500">@{u.username} · {u.email || 'no email'}</div></td><td className="p-4"><span className="px-2 py-1 rounded-full bg-slate-100 font-semibold uppercase text-xs">{u.role}</span></td><td className="p-4"><span className={`px-2 py-1 rounded-full text-xs font-semibold ${u.status==='active'?'bg-emerald-50 text-emerald-700':'bg-rose-50 text-rose-700'}`}>{u.status}</span></td><td className="p-4 text-slate-500">{u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Never'}</td><td className="p-4"><div className="flex justify-end gap-2"><button title="Edit" onClick={()=>openEdit(u)} className="p-2 rounded-lg hover:bg-slate-100"><ShieldCheck className="w-4 h-4"/></button><button title={u.status==='active'?'Deactivate':'Activate'} disabled={busy || u.id===currentUser.id} onClick={()=>toggle(u)} className="p-2 rounded-lg hover:bg-slate-100">{u.status==='active'?<UserX className="w-4 h-4"/>:<UserCheck className="w-4 h-4"/>}</button><button title="Reset password" onClick={()=>{setTarget(u);setError('');setModal('password')}} className="p-2 rounded-lg hover:bg-slate-100"><KeyRound className="w-4 h-4"/></button><button title="Delete" disabled={u.id===currentUser.id} onClick={()=>{setTarget(u);setError('');setModal('delete')}} className="p-2 rounded-lg hover:bg-rose-50 text-rose-600"><Trash2 className="w-4 h-4"/></button></div></td></tr>)}</tbody></table>{visible.length===0&&<div className="p-10 text-center text-slate-500">No users match your filters.</div>}</div>
-
-    {modal && <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl w-full max-w-lg p-6 shadow-2xl"><div className="flex items-center justify-between mb-5"><h2 className="text-xl font-black">{modal==='create'?'Create user':modal==='edit'?'Edit user':modal==='password'?'Reset password':'Delete user'}</h2><button onClick={close}><X/></button></div>{error&&<div className="mb-4 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">{error}</div>}
-      {(modal==='create'||modal==='edit') && <form onSubmit={modal==='create'?create:edit} className="space-y-3">
-        <input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Full name" className="w-full p-3 border rounded-xl"/>
-        {modal==='create'&&<input required value={form.username} onChange={e=>setForm({...form,username:e.target.value})} placeholder="Username" className="w-full p-3 border rounded-xl"/>}
-        <input required type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="Email" className="w-full p-3 border rounded-xl"/>
-        <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone" className="w-full p-3 border rounded-xl"/>
-        <input value={form.licenseNumber} onChange={e=>setForm({...form,licenseNumber:e.target.value})} placeholder="License number (optional)" className="w-full p-3 border rounded-xl"/>
-        <select value={form.role} onChange={e=>setForm({...form,role:e.target.value as UserRole})} className="w-full p-3 border rounded-xl"><option value="cashier">Cashier</option><option value="clinician">Clinician</option><option value="admin">Admin</option></select>
-        {modal==='create'&&<input required minLength={8} type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Initial password (8+ characters)" className="w-full p-3 border rounded-xl"/>}
-        <button disabled={busy} className="w-full bg-teal-700 text-white p-3 rounded-xl font-bold disabled:opacity-50">{busy?'Working...':modal==='create'?'Create account':'Save changes'}</button>
-      </form>}
-      {modal==='password'&&<form onSubmit={password} className="space-y-3"><p className="text-sm text-slate-600">Set a new password for <b>{target?.name}</b>. The password is sent directly to the secure server-side Auth function.</p><input required minLength={8} type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="New password (8+ characters)" className="w-full p-3 border rounded-xl"/><button disabled={busy} className="w-full bg-teal-700 text-white p-3 rounded-xl font-bold">{busy?'Working...':'Reset password'}</button></form>}
-      {modal==='delete'&&<div className="space-y-4"><p className="text-sm text-slate-600">This permanently removes <b>{target?.name}</b> from Supabase Auth and the pharmacy user directory.</p><input value={deleteText} onChange={e=>setDeleteText(e.target.value)} placeholder="Type DELETE to confirm" className="w-full p-3 border rounded-xl"/><button disabled={busy||deleteText!=='DELETE'} onClick={remove} className="w-full bg-rose-700 text-white p-3 rounded-xl font-bold disabled:opacity-50">{busy?'Deleting...':'Permanently delete account'}</button></div>}
-    </div></div>}
-  </div>;
+import { createManagedUser, updateManagedUser, setManagedUserStatus, resetManagedUserPassword, deleteManagedUser, listManagedUsers } from '../services/supabase';
+interface Props{currentUser:User;users:User[];onRefreshUsers:()=>void;onShowToast:(message:string,type:'success'|'warning'|'info')=>void;}
+export const UserManagementView:React.FC<Props>=({currentUser,users,onRefreshUsers,onShowToast})=>{
+ const [remoteUsers,setRemoteUsers]=useState<User[]>(users);const [search,setSearch]=useState('');const[role,setRole]=useState<'all'|UserRole>('all');const[status,setStatus]=useState<'all'|'active'|'inactive'>('all');const[modal,setModal]=useState<'create'|'edit'|'password'|'delete'|null>(null);const[target,setTarget]=useState<User|null>(null);const[busy,setBusy]=useState(false);const[error,setError]=useState('');const[form,setForm]=useState({name:'',username:'',email:'',phone:'',role:'cashier' as UserRole,password:'',licenseNumber:''});const[newPassword,setNewPassword]=useState('');const[deleteText,setDeleteText]=useState('');
+ const refresh=async()=>{const r=await listManagedUsers();if(r.ok)setRemoteUsers(r.users);else onShowToast(r.error||'Could not load users from Supabase.','warning');};
+ useEffect(()=>{void refresh();},[currentUser.id]);
+ const directory=remoteUsers.length?remoteUsers:users;
+ const visible=directory.filter(u=>{const q=search.toLowerCase();return(!q||u.name.toLowerCase().includes(q)||u.username.toLowerCase().includes(q)||(u.email||'').toLowerCase().includes(q)||(u.phone||'').includes(q))&&(role==='all'||u.role===role)&&(status==='all'||u.status===status);});
+ const close=()=>{setModal(null);setTarget(null);setError('');setBusy(false);setNewPassword('');setDeleteText('');};
+ const afterChange=async()=>{await refresh();onRefreshUsers();};
+ const openCreate=()=>{setForm({name:'',username:'',email:'',phone:'',role:'cashier',password:'',licenseNumber:''});setError('');setModal('create');};
+ const openEdit=(u:User)=>{setTarget(u);setForm({name:u.name,username:u.username,email:u.email||'',phone:u.phone||'',role:u.role,password:'',licenseNumber:u.licenseNumber||''});setError('');setModal('edit');};
+ const create=async(e:React.FormEvent)=>{e.preventDefault();setError('');if(!form.name.trim()||!form.username.trim()||!form.email.trim()||!form.password){setError('Name, username, email and password are required.');return;}if(form.password.length<8){setError('Password must be at least 8 characters.');return;}setBusy(true);const r=await createManagedUser(form);setBusy(false);if(!r.ok){setError(r.error||'Unable to create account.');return;}onShowToast(`Created ${form.role} account for ${form.name}.`,'success');close();await afterChange();};
+ const edit=async(e:React.FormEvent)=>{e.preventDefault();if(!target)return;setBusy(true);const r=await updateManagedUser(target.id,{name:form.name,email:form.email,phone:form.phone,role:form.role,licenseNumber:form.licenseNumber});setBusy(false);if(!r.ok){setError(r.error||'Unable to update account.');return;}onShowToast(`Updated ${target.name}.`,'success');close();await afterChange();};
+ const toggle=async(u:User)=>{if(u.id===currentUser.id){onShowToast('You cannot deactivate your own administrator account.','warning');return;}setBusy(true);const next=u.status==='active'?'inactive':'active';const r=await setManagedUserStatus(u.id,next);setBusy(false);if(!r.ok)onShowToast(r.error||'Unable to change account status.','warning');else{onShowToast(`${u.name} is now ${next}.`,'info');await afterChange();}};
+ const password=async(e:React.FormEvent)=>{e.preventDefault();if(!target)return;if(newPassword.length<8){setError('Password must be at least 8 characters.');return;}setBusy(true);const r=await resetManagedUserPassword(target.id,newPassword);setBusy(false);if(!r.ok){setError(r.error||'Unable to reset password.');return;}onShowToast(`Password reset for ${target.name}.`,'success');close();};
+ const remove=async()=>{if(!target||deleteText!=='DELETE')return;if(target.id===currentUser.id){setError('You cannot delete your own account.');return;}setBusy(true);const r=await deleteManagedUser(target.id);setBusy(false);if(!r.ok){setError(r.error||'Unable to delete account.');return;}onShowToast(`Deleted ${target.name}.`,'info');close();await afterChange();};
+ return <div className="space-y-6"><div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4"><div><div className="flex items-center gap-2 mb-1"><span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-100 text-teal-800 uppercase">Admin Access</span><span className="text-xs text-slate-500">• {directory.length} accounts</span></div><h1 className="text-2xl font-black text-slate-900">User & Role Management</h1><p className="text-sm text-slate-500 mt-1">Supabase Auth manages passwords and sessions. The browser never receives the service-role key.</p></div><button onClick={openCreate} className="flex items-center justify-center gap-2 bg-teal-700 hover:bg-teal-800 text-white px-5 py-3 rounded-2xl text-sm font-bold min-h-[44px]"><UserPlus className="w-4 h-4"/>New User</button></div>
+ <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-col md:flex-row gap-3"><div className="relative flex-1"><Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, username, email or phone" className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-teal-600"/></div><select value={role} onChange={e=>setRole(e.target.value as any)} className="px-3 py-2 border rounded-xl"><option value="all">All roles</option><option value="admin">Admins</option><option value="clinician">Clinicians</option><option value="cashier">Cashiers</option></select><select value={status} onChange={e=>setStatus(e.target.value as any)} className="px-3 py-2 border rounded-xl"><option value="all">All status</option><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+ <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="text-left p-4">User</th><th className="text-left p-4">Role</th><th className="text-left p-4">Status</th><th className="text-left p-4">Last login</th><th className="text-right p-4">Actions</th></tr></thead><tbody>{visible.map(u=><tr key={u.id} className="border-t border-slate-100"><td className="p-4"><div className="font-bold">{u.name}{u.id===currentUser.id&&<span className="ml-2 text-[10px] bg-teal-50 text-teal-700 px-2 py-1 rounded">YOU</span>}</div><div className="text-xs text-slate-500">@{u.username} · {u.email||'no email'}</div></td><td className="p-4"><span className="px-2 py-1 rounded-full bg-slate-100 font-semibold uppercase text-xs">{u.role}</span></td><td className="p-4"><span className={`px-2 py-1 rounded-full text-xs font-semibold ${u.status==='active'?'bg-emerald-50 text-emerald-700':'bg-rose-50 text-rose-700'}`}>{u.status}</span></td><td className="p-4 text-slate-500">{u.lastLogin?new Date(u.lastLogin).toLocaleString():'Never'}</td><td className="p-4"><div className="flex justify-end gap-2"><button title="Edit" onClick={()=>openEdit(u)} className="p-2 rounded-lg hover:bg-slate-100"><ShieldCheck className="w-4 h-4"/></button><button title={u.status==='active'?'Deactivate':'Activate'} disabled={busy||u.id===currentUser.id} onClick={()=>toggle(u)} className="p-2 rounded-lg hover:bg-slate-100">{u.status==='active'?<UserX className="w-4 h-4"/>:<UserCheck className="w-4 h-4"/>}</button><button title="Reset password" onClick={()=>{setTarget(u);setError('');setModal('password')}} className="p-2 rounded-lg hover:bg-slate-100"><KeyRound className="w-4 h-4"/></button><button title="Delete" disabled={u.id===currentUser.id} onClick={()=>{setTarget(u);setError('');setModal('delete')}} className="p-2 rounded-lg hover:bg-slate-100 text-rose-600"><Trash2 className="w-4 h-4"/></button></div></td></tr>)}</tbody></table>{visible.length===0&&<div className="p-10 text-center text-slate-500">No users match your filters.</div>}</div>
+ {modal&&<div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4"><div className="bg-white rounded-3xl w-full max-w-lg p-6 shadow-2xl"><div className="flex items-center justify-between mb-5"><h2 className="text-xl font-black">{modal==='create'?'Create user':modal==='edit'?'Edit user':modal==='password'?'Reset password':'Delete user'}</h2><button onClick={close}><X/></button></div>{error&&<div className="mb-4 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">{error}</div>}
+ {(modal==='create'||modal==='edit')&&<form onSubmit={modal==='create'?create:edit} className="space-y-3"><input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Full name" className="w-full p-3 border rounded-xl"/>{modal==='create'&&<input required value={form.username} onChange={e=>setForm({...form,username:e.target.value})} placeholder="Username" className="w-full p-3 border rounded-xl"/>}<input required type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="Email" className="w-full p-3 border rounded-xl"/><input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone" className="w-full p-3 border rounded-xl"/><input value={form.licenseNumber} onChange={e=>setForm({...form,licenseNumber:e.target.value})} placeholder="License number (optional)" className="w-full p-3 border rounded-xl"/><select value={form.role} onChange={e=>setForm({...form,role:e.target.value as UserRole})} className="w-full p-3 border rounded-xl"><option value="cashier">Cashier</option><option value="clinician">Clinician</option><option value="admin">Admin</option></select>{modal==='create'&&<input required minLength={8} type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="Initial password (8+ characters)" className="w-full p-3 border rounded-xl"/>}<button disabled={busy} className="w-full bg-teal-700 text-white p-3 rounded-xl font-bold disabled:opacity-50">{busy?'Working...':modal==='create'?'Create account':'Save changes'}</button></form>}
+ {modal==='password'&&<form onSubmit={password} className="space-y-3"><p className="text-sm text-slate-600">Set a new password for <b>{target?.name}</b>. Password handling stays server-side.</p><input required minLength={8} type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="New password (8+ characters)" className="w-full p-3 border rounded-xl"/><button disabled={busy} className="w-full bg-teal-700 text-white p-3 rounded-xl font-bold">{busy?'Working...':'Reset password'}</button></form>}
+ {modal==='delete'&&<div className="space-y-4"><p className="text-sm text-slate-600">This permanently removes <b>{target?.name}</b> from Supabase Auth and the pharmacy directory.</p><input value={deleteText} onChange={e=>setDeleteText(e.target.value)} placeholder="Type DELETE to confirm" className="w-full p-3 border rounded-xl"/><button disabled={busy||deleteText!=='DELETE'} onClick={remove} className="w-full bg-rose-700 text-white p-3 rounded-xl font-bold disabled:opacity-50">{busy?'Deleting...':'Permanently delete account'}</button></div>}
+ </div></div>}</div>;
 };

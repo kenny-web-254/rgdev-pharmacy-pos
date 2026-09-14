@@ -1,7 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { ClinicalTest, Consultation, Patient, Prescription, User, UserRole } from '../types';
 
-// Environment variable extraction supporting Vite client and runtime injection
+// Browser-safe configuration only. The URL and publishable/anon key are public
+// client configuration; privileged Supabase secrets must never be shipped here.
 const envUrl = (import.meta.env.VITE_SUPABASE_URL ||
   (typeof process !== 'undefined' ? process.env?.SUPABASE_URL : '') ||
   '') as string;
@@ -10,43 +11,42 @@ const envAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY ||
   (typeof process !== 'undefined' ? process.env?.SUPABASE_ANON_KEY : '') ||
   '') as string;
 
+let runtimeUrl = envUrl;
+let runtimeAnonKey = envAnonKey;
 let supabaseInstance: SupabaseClient | null = null;
 
 export const supabaseConfig = {
   getUrl(): string {
-    return envUrl || localStorage.getItem('pharmapos_supabase_url') || '';
+    return runtimeUrl;
   },
   getAnonKey(): string {
-    return envAnonKey || localStorage.getItem('pharmapos_supabase_anon_key') || '';
+    return runtimeAnonKey;
   },
   isConfigured(): boolean {
-    const url = this.getUrl();
-    const key = this.getAnonKey();
-    return Boolean(url && key && url.startsWith('https://'));
+    return Boolean(runtimeUrl && runtimeAnonKey && runtimeUrl.startsWith('https://'));
   },
+  // Runtime-only override for diagnostics/configuration screens. It is never
+  // persisted to localStorage, IndexedDB, cookies, or application data.
   setCredentials(url: string, anonKey: string) {
-    if (url) localStorage.setItem('pharmapos_supabase_url', url.trim());
-    if (anonKey) localStorage.setItem('pharmapos_supabase_anon_key', anonKey.trim());
-    supabaseInstance = null; // reset client to re-instantiate
+    runtimeUrl = url.trim();
+    runtimeAnonKey = anonKey.trim();
+    supabaseInstance = null;
   },
   clearCredentials() {
-    localStorage.removeItem('pharmapos_supabase_url');
-    localStorage.removeItem('pharmapos_supabase_anon_key');
+    runtimeUrl = envUrl;
+    runtimeAnonKey = envAnonKey;
     supabaseInstance = null;
   },
 };
 
 export function getSupabase(): SupabaseClient | null {
-  if (!supabaseConfig.isConfigured()) {
-    return null;
-  }
+  if (!supabaseConfig.isConfigured()) return null;
   if (!supabaseInstance) {
-    const url = supabaseConfig.getUrl();
-    const anonKey = supabaseConfig.getAnonKey();
-    supabaseInstance = createClient(url, anonKey, {
+    supabaseInstance = createClient(runtimeUrl, runtimeAnonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
+        detectSessionInUrl: true,
       },
     });
   }
@@ -56,80 +56,36 @@ export function getSupabase(): SupabaseClient | null {
 export async function testSupabaseConnection(): Promise<{ ok: boolean; message: string }> {
   const client = getSupabase();
   if (!client) {
-    return {
-      ok: false,
-      message: 'Supabase credentials are not configured yet. Please provide SUPABASE_URL and SUPABASE_ANON_KEY.',
-    };
+    return { ok: false, message: 'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in the deployment environment.' };
   }
-
   try {
-    const { error } = await client.from('medications').select('id').limit(1);
-    if (error) {
-      if (error.code === '42P01') {
-        return {
-          ok: false,
-          message: 'Connected to Supabase, but the tables have not been created yet. Please execute supabase/schema.sql in the SQL Editor.',
-        };
-      }
-      return {
-        ok: false,
-        message: `Supabase query error: ${error.message} (${error.code || 'UNKNOWN'})`,
-      };
-    }
-    return {
-      ok: true,
-      message: 'Successfully connected to Supabase database!',
-    };
+    const { error } = await client.from('pharmacy_users').select('id').limit(1);
+    if (error) return { ok: false, message: `Supabase query error: ${error.message} (${error.code || 'UNKNOWN'})` };
+    return { ok: true, message: 'Successfully connected to Supabase.' };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      message: `Connection failed: ${message}`,
-    };
+    return { ok: false, message: `Connection failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
-// ------------------------------------------------------------------
-// Realtime sync
-// ------------------------------------------------------------------
-// Tables that other clients (admin/clinician/cashier on other devices)
-// can change and that should trigger a live refresh in this session.
 export type RealtimeTable = 'medications' | 'prescriptions' | 'tests' | 'sale_transactions';
-
 let activeChannel: ReturnType<SupabaseClient['channel']> | null = null;
 
-/**
- * Subscribes to Postgres change events (INSERT/UPDATE/DELETE) on the given
- * tables via a single Supabase Realtime channel, invoking `onChange` with
- * the affected table name whenever a change arrives. Returns an unsubscribe
- * function. Safe to call even when Supabase isn't configured (no-ops).
- */
 export function subscribeToRealtimeChanges(
   tables: RealtimeTable[],
   onChange: (table: RealtimeTable) => void
 ): () => void {
   const client = getSupabase();
-  if (!client) {
-    return () => {};
-  }
-
-  // Tear down any previous channel before creating a new one
+  if (!client) return () => {};
   if (activeChannel) {
     client.removeChannel(activeChannel);
     activeChannel = null;
   }
-
   let channel = client.channel('pharmapos-realtime-sync');
   for (const table of tables) {
-    channel = channel.on(
-      'postgres_changes' as any,
-      { event: '*', schema: 'public', table },
-      () => onChange(table)
-    );
+    channel = channel.on('postgres_changes' as any, { event: '*', schema: 'public', table }, () => onChange(table));
   }
   channel.subscribe();
   activeChannel = channel;
-
   return () => {
     if (activeChannel) {
       client.removeChannel(activeChannel);
@@ -137,13 +93,6 @@ export function subscribeToRealtimeChanges(
     }
   };
 }
-
-// ------------------------------------------------------------------
-// Authentication (real Supabase Auth - NOT a local/demo mechanism)
-// ------------------------------------------------------------------
-// Credentials are verified server-side by Supabase Auth (GoTrue). The
-// `pharmacy_users` table only holds the profile/role for an already
-// -authenticated account; it never stores or checks a password.
 
 interface AuthResult {
   ok: boolean;
@@ -167,159 +116,85 @@ function rowToUser(row: any): User {
   };
 }
 
-/**
- * Returns true when Supabase is configured and no administrator account
- * exists yet, meaning the app should show the first-run "create
- * administrator" bootstrap form instead of the normal sign-in form.
- */
+// Public self-registration is intentionally disabled. New accounts must be
+// provisioned by the trusted administrator workflow.
 export async function checkBootstrapAvailable(): Promise<boolean> {
-  const client = getSupabase();
-  if (!client) return false;
-  try {
-    const { count, error } = await client
-      .from('pharmacy_users')
-      .select('id', { count: 'exact', head: true });
-    if (error) return false;
-    return (count || 0) === 0;
-  } catch {
-    return false;
-  }
+  return false;
 }
 
-/**
- * Signs in with Supabase Auth. `identifier` may be an email address or a
- * username; usernames are resolved to an email via the pharmacy_users
- * table before authenticating. Returns a generic error message on any
- * failure so the sign-in form never reveals whether a username exists.
- */
 export async function signInWithSupabase(identifier: string, password: string): Promise<AuthResult> {
   const client = getSupabase();
-  if (!client) {
-    return { ok: false, error: 'Supabase is not configured yet. Please configure database credentials in Settings.' };
-  }
+  if (!client) return { ok: false, error: 'Supabase is not configured. Please configure the deployment environment.' };
 
   const GENERIC_ERROR = 'Invalid credentials or user not authorized.';
   let email = identifier.trim();
 
   if (!email.includes('@')) {
-    const { data: profileByUsername } = await client
+    const { data } = await client
       .from('pharmacy_users')
       .select('email')
       .ilike('username', identifier.trim())
       .maybeSingle();
-    if (!profileByUsername?.email) {
-      return { ok: false, error: GENERIC_ERROR };
-    }
-    email = profileByUsername.email;
+    if (!data?.email) return { ok: false, error: GENERIC_ERROR };
+    email = data.email;
   }
 
   const { data: authData, error: authError } = await client.auth.signInWithPassword({ email, password });
-  if (authError || !authData?.user) {
-    return { ok: false, error: GENERIC_ERROR };
-  }
+  if (authError || !authData?.user) return { ok: false, error: GENERIC_ERROR };
 
   const { data: profile, error: profileError } = await client
     .from('pharmacy_users')
     .select('*')
-    .eq('id', authData.user.id)
+    .eq('auth_user_id', authData.user.id)
     .maybeSingle();
 
   if (profileError || !profile) {
     await client.auth.signOut();
     return { ok: false, error: 'Account not fully set up. Please contact your administrator.' };
   }
-
-  if (profile.status === 'inactive') {
+  if (profile.status !== 'active') {
     await client.auth.signOut();
     return { ok: false, error: 'This account has been deactivated. Please contact an Administrator.' };
   }
 
-  // Best-effort last-login stamp; failure here shouldn't block sign-in.
-  client
-    .from('pharmacy_users')
-    .update({ last_login: new Date().toISOString() })
-    .eq('id', authData.user.id)
-    .then(() => {});
-
-  return { ok: true, user: rowToUser({ ...profile, last_login: new Date().toISOString() }) };
+  const now = new Date().toISOString();
+  void client.from('pharmacy_users').update({ last_login: now }).eq('auth_user_id', authData.user.id);
+  return { ok: true, user: rowToUser({ ...profile, last_login: now }) };
 }
 
-/**
- * Creates the first Administrator account for a brand-new pharmacy
- * instance. Only succeeds when no pharmacy_users rows exist yet (checked
- * here and enforced again by the database RLS policy).
- */
-export async function signUpInitialAdmin(data: {
-  name: string;
-  email: string;
-  password: string;
-  phone?: string;
-  license?: string;
-}): Promise<AuthResult> {
+export async function getAuthenticatedProfile(): Promise<User | null> {
   const client = getSupabase();
-  if (!client) {
-    return { ok: false, error: 'Supabase is not configured yet. Please configure database credentials in Settings.' };
-  }
+  if (!client) return null;
+  const { data: sessionData } = await client.auth.getSession();
+  const authUser = sessionData.session?.user;
+  if (!authUser) return null;
+  const { data: profile } = await client.from('pharmacy_users').select('*').eq('auth_user_id', authUser.id).maybeSingle();
+  if (!profile || profile.status !== 'active') return null;
+  return rowToUser(profile);
+}
 
-  const bootstrapAvailable = await checkBootstrapAvailable();
-  if (!bootstrapAvailable) {
-    return { ok: false, error: 'An administrator account already exists. Please sign in instead.' };
-  }
-
-  const { data: signUpData, error: signUpError } = await client.auth.signUp({
-    email: data.email.trim(),
-    password: data.password,
+export function onSupabaseAuthStateChange(callback: (user: User | null) => void): () => void {
+  const client = getSupabase();
+  if (!client) return () => {};
+  const { data } = client.auth.onAuthStateChange(async (_event, session) => {
+    if (!session?.user) {
+      callback(null);
+      return;
+    }
+    // Defer profile I/O so auth state callbacks never deadlock on nested Supabase calls.
+    setTimeout(async () => callback(await getAuthenticatedProfile()), 0);
   });
+  return () => data.subscription.unsubscribe();
+}
 
-  if (signUpError || !signUpData?.user) {
-    return { ok: false, error: signUpError?.message || 'Failed to create the administrator account.' };
-  }
-
-  const username = data.email.trim().split('@')[0].toLowerCase();
-  const profileRow = {
-    id: signUpData.user.id,
-    username,
-    name: data.name.trim(),
-    role: 'admin' as UserRole,
-    status: 'active' as const,
-    email: data.email.trim(),
-    phone: data.phone?.trim() || null,
-    license_number: data.license?.trim() || null,
-    avatar_color: 'bg-teal-700',
-    last_login: new Date().toISOString(),
-  };
-
-  const { error: insertError } = await client.from('pharmacy_users').insert(profileRow);
-  if (insertError) {
-    return { ok: false, error: `Account created but profile setup failed: ${insertError.message}` };
-  }
-
-  // If email confirmation is required by the Supabase project's auth
-  // settings, `signUp` won't return an active session yet.
-  if (!signUpData.session) {
-    return {
-      ok: false,
-      error:
-        'Administrator account created. Please check your email to confirm your address, then sign in (or disable email confirmations in Supabase Auth settings for instant setup).',
-    };
-  }
-
-  return { ok: true, user: rowToUser(profileRow) };
+export async function signUpInitialAdmin(): Promise<AuthResult> {
+  return { ok: false, error: 'Public account creation is disabled. An administrator must provision this account.' };
 }
 
 export async function signOutSupabase(): Promise<void> {
   const client = getSupabase();
-  if (!client) return;
-  await client.auth.signOut();
+  if (client) await client.auth.signOut();
 }
-
-// ------------------------------------------------------------------
-// Clinical workflow (patients / consultations / clinical tests)
-// ------------------------------------------------------------------
-// Backs the (currently unreleased - see project notes) ClinicalWorkflowView.
-// Kept in its own `clinical_tests` table rather than reusing `tests`
-// because the two features model "a test" differently (see schema.sql)
-// and must not be conflated.
 
 function patientToRow(p: Patient) {
   return {
@@ -337,19 +212,13 @@ function patientToRow(p: Patient) {
 }
 
 export async function upsertPatientToSupabase(patient: Patient): Promise<boolean> {
-  const client = getSupabase();
-  if (!client) return false;
+  const client = getSupabase(); if (!client) return false;
   const { error } = await client.from('patients').upsert(patientToRow(patient));
-  if (error) {
-    console.error('Cloud sync failed (patient upsert)', error);
-    return false;
-  }
-  return true;
+  return !error;
 }
 
 export async function insertConsultationToSupabase(consultation: Consultation): Promise<boolean> {
-  const client = getSupabase();
-  if (!client) return false;
+  const client = getSupabase(); if (!client) return false;
   const { error } = await client.from('consultations').insert({
     id: consultation.id,
     patient_id: consultation.patientId,
@@ -362,16 +231,11 @@ export async function insertConsultationToSupabase(consultation: Consultation): 
     notes: consultation.notes || null,
     vitals: consultation.vitals || {},
   });
-  if (error) {
-    console.error('Cloud sync failed (consultation insert)', error);
-    return false;
-  }
-  return true;
+  return !error;
 }
 
 export async function upsertClinicalTestToSupabase(test: ClinicalTest): Promise<boolean> {
-  const client = getSupabase();
-  if (!client) return false;
+  const client = getSupabase(); if (!client) return false;
   const { error } = await client.from('clinical_tests').upsert({
     id: test.id,
     consultation_id: test.consultationId || null,
@@ -386,16 +250,11 @@ export async function upsertClinicalTestToSupabase(test: ClinicalTest): Promise<
     requested_by: test.requestedBy,
     conducted_at: test.conductedAt || null,
   });
-  if (error) {
-    console.error('Cloud sync failed (clinical test upsert)', error);
-    return false;
-  }
-  return true;
+  return !error;
 }
 
 export async function upsertPrescriptionToSupabase(rx: Prescription): Promise<boolean> {
-  const client = getSupabase();
-  if (!client) return false;
+  const client = getSupabase(); if (!client) return false;
   const { error } = await client.from('prescriptions').upsert({
     id: rx.id,
     rx_number: rx.rxNumber,
@@ -419,9 +278,5 @@ export async function upsertPrescriptionToSupabase(rx: Prescription): Promise<bo
     insurance_provider: rx.insuranceProvider || null,
     insurance_co_pay_rate: rx.insuranceCoPayRate || 0,
   });
-  if (error) {
-    console.error('Cloud sync failed (prescription upsert)', error);
-    return false;
-  }
-  return true;
+  return !error;
 }

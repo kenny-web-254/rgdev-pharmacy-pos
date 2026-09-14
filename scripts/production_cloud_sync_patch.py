@@ -20,11 +20,7 @@ a = replace_required(
     flags=0,
 )
 
-# Hydrate every shared operational dataset that the current UI keeps in React state.
-a = replace_required(
-    a,
-    r"  // Cloud hydration: when Supabase is configured,[\s\S]*?  // Default landing tab per role",
-    """  // Cloud hydration: Supabase is authoritative for operational data.
+hydration_block = """  // Cloud hydration: Supabase is authoritative for operational data.
   // Browser storage may retain carts/drafts for continuity, but it never wins over the server.
   useEffect(() => {
     if (!currentUser || !supabaseConfig.isConfigured()) return;
@@ -63,15 +59,18 @@ a = replace_required(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.id]);
 
-  // Default landing tab per role""",
-    'authoritative cloud hydration',
-)
+"""
 
-# Replace the existing realtime subscription block with one that re-reads the authoritative rows.
-a = replace_required(
-    a,
-    r"  // Realtime sync:[\s\S]*?\n\s*// Default landing tab per role",
-    """  // Realtime sync: a database event only invalidates this device's cache.
+# First replace the legacy hydration block, but do not consume the realtime block.
+if 'Cloud hydration: Supabase is authoritative for operational data.' not in a:
+    a = replace_required(
+        a,
+        r"  // Cloud hydration: when Supabase is configured,[\s\S]*?\n\s*// Default landing tab per role",
+        hydration_block + "  // Default landing tab per role",
+        'authoritative cloud hydration',
+    )
+
+realtime_block = """  // Realtime sync: a database event only invalidates this device's cache.
   // The callback always re-reads authoritative rows from Supabase before updating UI state.
   useRealtimeSync({
     enabled: !!currentUser,
@@ -112,9 +111,25 @@ a = replace_required(
     },
   });
 
-  // Default landing tab per role""",
-    'authoritative realtime callbacks',
-)
+"""
+
+# If the earlier hydration transform swallowed the legacy realtime block, insert the authoritative block
+# immediately before the default-landing effect. Otherwise replace the legacy block in place.
+if 'onSalesChanged: async' not in a:
+    if '// Realtime sync:' in a:
+        a = replace_required(
+            a,
+            r"  // Realtime sync:[\s\S]*?\n\s*// Default landing tab per role",
+            realtime_block + "  // Default landing tab per role",
+            'authoritative realtime callbacks',
+        )
+    else:
+        a = replace_required(
+            a,
+            r"  // Default landing tab per role",
+            realtime_block + "  // Default landing tab per role",
+            'authoritative realtime insertion',
+        )
 
 p.write_text(a)
 print('Authoritative cloud sales/receipt hydration and realtime refresh applied.')

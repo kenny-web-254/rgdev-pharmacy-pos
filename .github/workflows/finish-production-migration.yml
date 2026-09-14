@@ -12,246 +12,25 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[production-hardening]')"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Harden storage and authentication
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-          import re
+      - name: Run deterministic hardening script
+        run: python3 scripts/production_hardening.py
 
-          storage = Path('src/services/storage.ts')
-          s = storage.read_text()
+      - name: Install dependencies
+        run: npm ci
 
-          s = re.sub(r"import \{\n  DEMO_USERS,[\s\S]*?\n\} from '../data/mockData';\n", "", s, count=1)
+      - name: TypeScript check
+        run: npx tsc --noEmit
 
-          s = re.sub(r"  getMedications\(\): Medication\[\] \{[\s\S]*?\n  \},\n\n  saveMedications", """  getMedications(): Medication[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.MEDICATIONS);
-      if (data !== null) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to load cached medications', e);
-    }
-    return [];
-  },
+      - name: Production build
+        run: npm run build
 
-  saveMedications""", s, count=1)
-
-          s = re.sub(r"  getPrescriptions\(\): Prescription\[\] \{[\s\S]*?\n  \},\n\n  savePrescriptions", """  getPrescriptions(): Prescription[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.PRESCRIPTIONS);
-      if (data !== null) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to load cached prescriptions', e);
-    }
-    return [];
-  },
-
-  savePrescriptions""", s, count=1)
-
-          s = re.sub(r"  getTests\(\): MedicalTest\[\] \{[\s\S]*?\n  \},\n\n  saveTests", """  getTests(): MedicalTest[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.TESTS);
-      if (data !== null) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to load cached tests', e);
-    }
-    return [];
-  },
-
-  saveTests""", s, count=1)
-
-          s = re.sub(r"  getTransactions\(\): SaleTransaction\[\] \{[\s\S]*?\n  \},\n\n  saveTransactions", """  getTransactions(): SaleTransaction[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      if (data !== null) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to load cached transactions', e);
-    }
-    return [];
-  },
-
-  saveTransactions""", s, count=1)
-
-          # Local users are no longer an authority. User management is handled by Supabase Auth + Edge Function.
-          users_replacement = """  // Users are never authoritative in browser storage. Supabase Auth + pharmacy_users are authoritative.
-  getUsers(): User[] { return []; },
-  saveUsers(_users: User[]): void {},
-  getUserById(_id: string): User | undefined { return undefined; },
-
-  createUser(): { success: boolean; error: string } {
-    return { success: false, error: 'Local user creation is disabled. Use Supabase Auth administrator provisioning.' };
-  },
-
-  updateUser(): { success: boolean; error: string } {
-    return { success: false, error: 'Local user updates are disabled. Use Supabase Auth administrator provisioning.' };
-  },
-
-  toggleUserStatus(): { success: boolean; error: string } {
-    return { success: false, error: 'Local user status changes are disabled. Use Supabase Auth administrator provisioning.' };
-  },
-
-  deleteUser(): { success: boolean; error: string } {
-    return { success: false, error: 'Local user deletion is disabled. Use Supabase Auth administrator provisioning.' };
-  },
-
-  resetUserPassword(): { success: boolean; error: string } {
-    return { success: false, error: 'Local password handling is disabled. Use Supabase Auth administrator provisioning.' };
-  },
-
-"""
-          s = re.sub(r"  // Users & Staff Management[\s\S]*?\n  // Audit Logs", users_replacement + "  // Audit Logs", s, count=1)
-
-          s = re.sub(r"  getAuditLogs\(\): AuditLog\[\] \{[\s\S]*?\n  \},\n\n  saveAuditLogs", """  getAuditLogs(): AuditLog[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS);
-      if (data !== null) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to load cached audit logs', e);
-    }
-    return [];
-  },
-
-  saveAuditLogs""", s, count=1)
-
-          # The authenticated user comes only from Supabase Auth/profile. Never bootstrap from localStorage.
-          s = re.sub(r"  getActiveUser\(\): User \| null \{[\s\S]*?\n  \},\n\n  saveActiveUser", """  getActiveUser(): User | null {
-    return null;
-  },
-
-  saveActiveUser""", s, count=1)
-          s = re.sub(r"  saveActiveUser\(user: User\): void \{[\s\S]*?\n  \},\n\n  logoutActiveUser", """  saveActiveUser(_user: User): void {
-    // Intentionally empty: Supabase Auth owns the session.
-  },
-
-  logoutActiveUser""", s, count=1)
-          s = re.sub(r"  logoutActiveUser\(user\?: User \| null\): void \{[\s\S]*?\n  \},\n\n  // NOTE: The previous local", """  logoutActiveUser(_user?: User | null): void {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.ACTIVE_USER);
-      localStorage.removeItem(STORAGE_KEYS.LOGGED_OUT);
-    } catch {}
-  },
-
-  // NOTE: The previous local""", s, count=1)
-
-          # resetAllData must never restore demo users or demo business records.
-          s = re.sub(r"  // Reset demo data\n  resetAllData\(\): void \{[\s\S]*?\n  \},\n\n  // ------------------------------------------------------------------", """  // Clear only browser cache/drafts. Server data is authoritative and is never replaced with demo data.
-  resetAllData(): void {
-    for (const key of [
-      STORAGE_KEYS.MEDICATIONS, STORAGE_KEYS.PRESCRIPTIONS, STORAGE_KEYS.TESTS,
-      STORAGE_KEYS.TRANSACTIONS, STORAGE_KEYS.OFFLINE_QUEUE, STORAGE_KEYS.AUDIT_LOGS,
-      STORAGE_KEYS.ACTIVE_USER, STORAGE_KEYS.USERS,
-    ]) {
-      try { localStorage.removeItem(key); } catch {}
-    }
-  },
-
-  // ------------------------------------------------------------------""", s, count=1)
-
-          storage.write_text(s)
-
-          app = Path('src/App.tsx')
-          a = app.read_text()
-          a = a.replace(
-              "import { supabaseConfig, checkBootstrapAvailable, signOutSupabase } from './services/supabase';",
-              "import { supabaseConfig, signOutSupabase, getAuthenticatedProfile, onSupabaseAuthStateChange } from './services/supabase';"
-          )
-          a = a.replace(
-              "const [currentUser, setCurrentUser] = useState<User | null>(() => storageService.getActiveUser());",
-              "const [currentUser, setCurrentUser] = useState<User | null>(null);\n  const [authReady, setAuthReady] = useState(false);"
-          )
-          a = a.replace(
-              "const [users, setUsers] = useState<User[]>(() => storageService.getUsers());",
-              "const [users, setUsers] = useState<User[]>([]);"
-          )
-          a = a.replace(
-              "const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => storageService.getAuditLogs());",
-              "const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);"
-          )
-          a = a.replace(
-              "  const refreshUsersAndLogs = () => {\n    setUsers(storageService.getUsers());\n    setAuditLogs(storageService.getAuditLogs());\n    setCurrentUser(storageService.getActiveUser());\n  };",
-              "  const refreshUsersAndLogs = async () => {\n    const result = await import('./services/supabase').then((m) => m.listManagedUsers());\n    if (result.ok) setUsers(result.users);\n    setAuditLogs(storageService.getAuditLogs());\n    const profile = await getAuthenticatedProfile();\n    setCurrentUser(profile);\n  };"
-          )
-          a = a.replace(
-              "  const handleLogout = () => {\n    storageService.logoutActiveUser(currentUser);\n    setCurrentUser(null);\n    void signOutSupabase();\n    showToast('Signed out of session.', 'info');\n  };",
-              "  const handleLogout = () => {\n    setCurrentUser(null);\n    void signOutSupabase();\n    showToast('Signed out of session.', 'info');\n  };"
-          )
-          # Replace legacy bootstrap effect with a real Supabase auth bootstrap/listener.
-          legacy = re.search(r"  // First-run setup:[\s\S]*?\n  // Security: auto-logout", a)
-          replacement = """  // Authentication bootstrap: Supabase Auth is the only session authority.
-  useEffect(() => {
-    if (!supabaseConfig.isConfigured()) {
-      setAuthReady(true);
-      setCurrentUser(null);
-      return;
-    }
-
-    let mounted = true;
-    getAuthenticatedProfile().then((profile) => {
-      if (!mounted) return;
-      setCurrentUser(profile);
-      setAuthReady(true);
-    });
-
-    const unsubscribe = onSupabaseAuthStateChange((profile) => {
-      if (!mounted) return;
-      setCurrentUser(profile);
-      setAuthReady(true);
-    });
-
-    return () => {
-      mounted = false;
-      unsubscribe();
-    };
-  }, []);
-
-  // Security: auto-logout"""
-          if legacy:
-              a = a[:legacy.start()] + replacement + a[legacy.end():]
-
-          a = a.replace(
-              "  const handleLogin = (user: User) => {\n    setCurrentUser(user);",
-              "  const handleLogin = (user: User) => {\n    setCurrentUser(user);"
-          )
-          # LoginView should never depend on a local bootstrap flag.
-          a = a.replace("          isBootstrapAvailable={isBootstrapAvailable}\n", "")
-          # Render a small auth loading state before deciding between login/app.
-          marker = "  // If user is logged out, render standalone login authentication screen\n  if (!currentUser) {"
-          a = a.replace(marker, "  // Never render the application before the real Supabase session has been resolved.\n  if (!authReady) {\n    return <div className=\"min-h-screen bg-slate-900 text-white flex items-center justify-center text-sm font-semibold\">Checking secure session…</div>;\n  }\n\n  // If user is logged out, render standalone login authentication screen\n  if (!currentUser) {")
-          app.write_text(a)
-          PY
-
-      - name: Build check
-        run: |
-          npm ci
-          npm run build
-
-      - name: Commit hardening changes
+      - name: Commit verified changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/App.tsx src/services/storage.ts
-          git commit -m "chore: finish production auth and data-source hardening [production-hardening]" || exit 0
+          git add src/App.tsx src/services/storage.ts scripts/production_hardening.py
+          git diff --cached --quiet || git commit -m "feat: finish production auth and data-source hardening [production-hardening]"
           git push
-
-      - name: Remove one-shot workflow
-        if: success()
-        run: |
-          git rm .github/workflows/finish-production-migration.yml || true
-          git commit -m "chore: remove one-shot production hardening workflow [production-hardening]" || true
-          git push || true

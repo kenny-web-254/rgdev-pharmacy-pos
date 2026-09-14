@@ -6,7 +6,7 @@
   "engines": {"node": ">=20.0.0"},
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "python3 scripts/production_hardening.py && python3 scripts/production_sale_patch.py && python3 scripts/production_cloud_sync_patch.py && python3 scripts/production_inventory_import.py && vite build",
+    "build": "python3 scripts/production_hardening.py && python3 scripts/production_sale_patch.py && python3 scripts/production_cloud_sync_patch.py && python3 scripts/production_inventory_import.py && python3 scripts/production_verify.py && vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

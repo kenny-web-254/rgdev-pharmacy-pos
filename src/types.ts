@@ -9,13 +9,13 @@ export type UserStatus = 'active' | 'inactive';
 export interface User {
   id: string;
   username: string;
+  password?: string;
   email?: string;
   name: string;
   role: UserRole;
   status: UserStatus;
   createdAt: string;
   lastLogin?: string;
-  password?: string;
   phone?: string;
   licenseNumber?: string;
   avatarColor: string;
@@ -23,6 +23,7 @@ export interface User {
 
 export type AppNavTab = 
   | 'pos' 
+  | 'clinical'
   | 'prescriptions' 
   | 'tests'
   | 'inventory' 
@@ -72,30 +73,134 @@ export interface Medication {
   requiresRefrigeration?: boolean;
 }
 
-export type PrescriptionStatus = 'Active' | 'Dispensed' | 'Partially Dispensed' | 'Expired';
+export type PrescriptionStatus = 
+  | 'Draft' 
+  | 'Issued' 
+  | 'Partially Dispensed' 
+  | 'Dispensed' 
+  | 'Cancelled' 
+  | 'Expired'
+  | 'Active'; // Keep 'Active' for backwards compatibility with existing rows
+
+export interface PrescriptionItem {
+  id: string;
+  medicationId: string;
+  medicationName: string;
+  genericName?: string;
+  dosageInstructions: string;
+  quantityPrescribed: number;
+  quantityDispensedSoFar: number;
+  refillsAllowed: number;
+  refillsRemaining: number;
+}
 
 export interface Prescription {
   id: string;
   rxNumber: string; // e.g., "RX-80219"
   barcode: string;
+  patientId?: string;
   patientName: string;
   patientDOB: string;
   patientPhone: string;
   doctorName: string;
   doctorLicense: string;
   doctorClinic: string;
-  medicationId: string;
+  medicationId?: string;
   medicationName: string;
-  dosageInstructions: string; // e.g. "Take 1 tablet twice daily after meals for 10 days"
-  quantityPrescribed: number;
-  quantityDispensedSoFar: number;
-  refillsAllowed: number;
-  refillsRemaining: number;
+  dosageInstructions?: string;
+  quantityPrescribed?: number;
+  quantityDispensedSoFar?: number;
+  refillsAllowed?: number;
+  refillsRemaining?: number;
+  items?: PrescriptionItem[];
   dateIssued: string;
   expiryDate: string;
   status: PrescriptionStatus;
   insuranceProvider?: string;
   insuranceCoPayRate?: number; // e.g., 0.20 for 80% coverage
+  notes?: string;
+}
+
+export interface Patient {
+  id: string;
+  fullName: string;
+  dob: string;
+  gender: 'Male' | 'Female' | 'Other';
+  phone: string;
+  email?: string;
+  address?: string;
+  allergies?: string[];
+  insuranceProvider?: string;
+  insurancePolicyNumber?: string;
+  createdAt: string;
+}
+
+export interface ClinicalTest {
+  id: string;
+  consultationId?: string;
+  patientId: string;
+  patientName?: string;
+  testName: string;
+  category: 'Hematology' | 'Biochemistry' | 'Microbiology' | 'Rapid Diagnostic' | 'Urinalysis' | 'Other';
+  status: 'Pending' | 'In Progress' | 'Completed' | 'Cancelled';
+  results?: string;
+  referenceRanges?: string;
+  notes?: string;
+  requestedBy: string;
+  conductedAt?: string;
+  createdAt: string;
+}
+
+export interface Consultation {
+  id: string;
+  patientId: string;
+  patientName: string;
+  clinicianId: string;
+  clinicianName: string;
+  date: string;
+  symptoms: string;
+  diagnosis: string;
+  notes?: string;
+  vitals?: {
+    bp?: string;
+    temperature?: string;
+    heartRate?: string;
+    weight?: string;
+    oxygenSat?: string;
+  };
+  tests?: ClinicalTest[];
+  prescriptions?: Prescription[];
+  createdAt: string;
+}
+
+export interface InventoryMovement {
+  id: string;
+  medicationId: string;
+  medicationName?: string;
+  movementType: 'IMPORT_ADD' | 'IMPORT_REDUCE' | 'IMPORT_SET' | 'SALE' | 'RETURN' | 'MANUAL_ADJUSTMENT' | 'DAMAGE_WRITE_OFF';
+  quantityChange: number;
+  previousStock: number;
+  newStock: number;
+  batchNumber?: string;
+  reason?: string;
+  userId?: string;
+  userName?: string;
+  createdAt: string;
+}
+
+export interface InventoryImportBatch {
+  id: string;
+  importId: string;
+  filename: string;
+  fileHash?: string;
+  totalRows: number;
+  createdCount: number;
+  updatedCount: number;
+  stockAdded: number;
+  stockReduced: number;
+  actorId?: string;
+  actorName?: string;
+  createdAt: string;
 }
 
 export type TestStatus = 'Ordered' | 'In Progress' | 'Completed' | 'Cancelled';
@@ -210,6 +315,9 @@ export interface ReceiptSettings {
   showBarcode: boolean;
   showTaxBreakdown: boolean;
   currencySymbol: string;
+  enableReceiptPrinting?: boolean; // Turn receipt printing on/off
+  autoPrintReceipt?: boolean; // Auto print immediately upon checkout without dialog
+  showReceiptDialog?: boolean; // Whether to show receipt modal after checkout
 }
 
 export interface InventoryAlert {

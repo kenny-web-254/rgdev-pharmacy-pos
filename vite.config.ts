@@ -5,8 +5,6 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
-  const isProduction = process.env.NODE_ENV === 'production';
-
   return {
     base: '/',
     plugins: [
@@ -15,7 +13,7 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         // Keep the service worker out of AI Studio/local development previews.
-        // It is enabled automatically for production builds.
+        // The PWA service worker is generated for production builds.
         devOptions: {
           enabled: false,
         },
@@ -50,7 +48,6 @@ export default defineConfig(() => {
               purpose: 'maskable',
             },
           ],
-          ...(isProduction ? {} : {}),
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],

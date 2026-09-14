@@ -70,7 +70,7 @@ a = replace_required(
 # Replace the existing realtime subscription block with one that re-reads the authoritative rows.
 a = replace_required(
     a,
-    r"  // Realtime sync: live-refresh medications/prescriptions/tests when another[\s\S]*?\n  \}\);\n\n  // Default landing tab per role",
+    r"  // Realtime sync:[\s\S]*?\n\s*// Default landing tab per role",
     """  // Realtime sync: a database event only invalidates this device's cache.
   // The callback always re-reads authoritative rows from Supabase before updating UI state.
   useRealtimeSync({

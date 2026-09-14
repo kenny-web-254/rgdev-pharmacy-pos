@@ -1,18 +1,64 @@
 -- Supabase Auth hardening migration.
--- The production database migration was applied separately.
--- Keep this file as the repository record of the Auth/RLS hardening work.
+-- Applied to production and kept here as the repository migration record.
 BEGIN;
-ALTER TABLE public.pharmacy_users ALTER COLUMN id DROP DEFAULT;
-ALTER TABLE public.pharmacy_users ALTER COLUMN id TYPE uuid USING id::uuid;
-ALTER TABLE public.pharmacy_users ALTER COLUMN id SET DEFAULT gen_random_uuid();
-ALTER TABLE public.pharmacy_users ALTER COLUMN password_hash DROP NOT NULL;
+
 ALTER TABLE public.pharmacy_users ADD COLUMN IF NOT EXISTS auth_user_id uuid;
-UPDATE public.pharmacy_users SET auth_user_id=id WHERE auth_user_id IS NULL AND id IN (SELECT id FROM auth.users);
 CREATE UNIQUE INDEX IF NOT EXISTS pharmacy_users_auth_user_id_uidx ON public.pharmacy_users(auth_user_id) WHERE auth_user_id IS NOT NULL;
-ALTER TABLE public.pharmacy_users ADD CONSTRAINT pharmacy_users_auth_user_id_fkey FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
-INSERT INTO public.pharmacy_users (id,username,name,role,status,email,auth_user_id) VALUES ('70e222d9-604f-4b32-a477-b31ab6e39cc4','admin','RGDev Administrator','admin','active','admin@rgdev.pos','70e222d9-604f-4b32-a477-b31ab6e39cc4') ON CONFLICT (id) DO UPDATE SET username=excluded.username,name=excluded.name,role=excluded.role,status=excluded.status,email=excluded.email,auth_user_id=excluded.auth_user_id,updated_at=now();
-UPDATE auth.users SET raw_app_meta_data=coalesce(raw_app_meta_data,'{}'::jsonb)||jsonb_build_object('role','admin') WHERE id='70e222d9-604f-4b32-a477-b31ab6e39cc4';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='pharmacy_users_auth_user_id_fkey') THEN
+    ALTER TABLE public.pharmacy_users
+      ADD CONSTRAINT pharmacy_users_auth_user_id_fkey
+      FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+UPDATE public.pharmacy_users
+SET role=lower(role),
+    auth_user_id='70e222d9-604f-4b32-a477-b31ab6e39cc4',
+    updated_at=now()
+WHERE id='70e222d9-604f-4b32-a477-b31ab6e39cc4'
+  AND email='admin@rgdev.pos';
+
 ALTER TABLE public.pharmacy_users DROP COLUMN IF EXISTS password_hash;
-DROP EVENT TRIGGER IF EXISTS ensure_rls;
+
+CREATE SCHEMA IF NOT EXISTS private;
+CREATE OR REPLACE FUNCTION private.current_pharmacy_role()
+RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path=public,pg_temp
+AS $$
+  SELECT role FROM public.pharmacy_users
+  WHERE auth_user_id=(SELECT auth.uid()) AND status='active'
+  LIMIT 1;
+$$;
+REVOKE ALL ON FUNCTION private.current_pharmacy_role() FROM public,anon,authenticated;
+GRANT EXECUTE ON FUNCTION private.current_pharmacy_role() TO authenticated;
+
 DROP FUNCTION IF EXISTS public.rls_auto_enable();
+DROP FUNCTION IF EXISTS public.ensure_rls();
+
+DROP POLICY IF EXISTS pharmacy_users_select ON public.pharmacy_users;
+DROP POLICY IF EXISTS pharmacy_users_insert ON public.pharmacy_users;
+DROP POLICY IF EXISTS pharmacy_users_update ON public.pharmacy_users;
+DROP POLICY IF EXISTS pharmacy_users_delete ON public.pharmacy_users;
+
+CREATE POLICY pharmacy_users_select ON public.pharmacy_users
+FOR SELECT TO authenticated
+USING (auth_user_id=(SELECT auth.uid()) OR (SELECT private.current_pharmacy_role())='admin');
+
+CREATE POLICY pharmacy_users_insert ON public.pharmacy_users
+FOR INSERT TO authenticated
+WITH CHECK ((SELECT private.current_pharmacy_role())='admin');
+
+CREATE POLICY pharmacy_users_update ON public.pharmacy_users
+FOR UPDATE TO authenticated
+USING (auth_user_id=(SELECT auth.uid()) OR (SELECT private.current_pharmacy_role())='admin')
+WITH CHECK (auth_user_id=(SELECT auth.uid()) OR (SELECT private.current_pharmacy_role())='admin');
+
+CREATE POLICY pharmacy_users_delete ON public.pharmacy_users
+FOR DELETE TO authenticated
+USING ((SELECT private.current_pharmacy_role())='admin' AND auth_user_id <> (SELECT auth.uid()));
+
 COMMIT;

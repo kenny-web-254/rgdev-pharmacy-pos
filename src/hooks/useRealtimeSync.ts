@@ -7,37 +7,83 @@ interface UseRealtimeSyncOptions {
   onMedicationsChanged: () => void;
   onPrescriptionsChanged: () => void;
   onTestsChanged: () => void;
+  onPatientsChanged?: () => void;
+  onConsultationsChanged?: () => void;
+  onClinicalTestsChanged?: () => void;
+  onSalesChanged?: () => void;
+  onReceiptSettingsChanged?: () => void;
+  onUsersChanged?: () => void;
 }
 
 /**
- * Subscribes to Supabase Realtime changes for the tables other devices
- * (other cashiers, the clinician's tablet, the admin's laptop) can write
- * to, and triggers the given refresh callback so this session's data
- * stays live without a manual reload. No-ops when Supabase isn't
- * configured or `enabled` is false.
+ * Keeps an authenticated browser session subscribed to the shared Supabase
+ * source of truth. Realtime never becomes a second database: callbacks must
+ * re-read authoritative rows from Supabase before updating React state.
  */
 export function useRealtimeSync({
   enabled,
   onMedicationsChanged,
   onPrescriptionsChanged,
   onTestsChanged,
+  onPatientsChanged,
+  onConsultationsChanged,
+  onClinicalTestsChanged,
+  onSalesChanged,
+  onReceiptSettingsChanged,
+  onUsersChanged,
 }: UseRealtimeSyncOptions) {
-  // Keep latest callbacks in refs so the subscription doesn't need to be
-  // torn down and rebuilt every time a parent re-renders.
-  const callbacksRef = useRef({ onMedicationsChanged, onPrescriptionsChanged, onTestsChanged });
-  callbacksRef.current = { onMedicationsChanged, onPrescriptionsChanged, onTestsChanged };
+  const callbacksRef = useRef({
+    onMedicationsChanged,
+    onPrescriptionsChanged,
+    onTestsChanged,
+    onPatientsChanged,
+    onConsultationsChanged,
+    onClinicalTestsChanged,
+    onSalesChanged,
+    onReceiptSettingsChanged,
+    onUsersChanged,
+  });
+  callbacksRef.current = {
+    onMedicationsChanged,
+    onPrescriptionsChanged,
+    onTestsChanged,
+    onPatientsChanged,
+    onConsultationsChanged,
+    onClinicalTestsChanged,
+    onSalesChanged,
+    onReceiptSettingsChanged,
+    onUsersChanged,
+  };
 
   useEffect(() => {
     if (!enabled || !supabaseConfig.isConfigured()) return;
 
-    const tables: RealtimeTable[] = ['medications', 'prescriptions', 'tests'];
+    const tables: RealtimeTable[] = [
+      'medications',
+      'prescriptions',
+      'tests',
+      'patients',
+      'consultations',
+      'clinical_tests',
+      'sale_transactions',
+      'receipt_settings',
+      'pharmacy_users',
+    ];
+
     const unsubscribe = subscribeToRealtimeChanges(tables, (table) => {
       if (table === 'medications') callbacksRef.current.onMedicationsChanged();
       if (table === 'prescriptions') callbacksRef.current.onPrescriptionsChanged();
       if (table === 'tests') callbacksRef.current.onTestsChanged();
+      if (table === 'patients') callbacksRef.current.onPatientsChanged?.();
+      if (table === 'consultations') callbacksRef.current.onConsultationsChanged?.();
+      if (table === 'clinical_tests') callbacksRef.current.onClinicalTestsChanged?.();
+      if (table === 'sale_transactions') callbacksRef.current.onSalesChanged?.();
+      if (table === 'receipt_settings') callbacksRef.current.onReceiptSettingsChanged?.();
+      if (table === 'pharmacy_users') callbacksRef.current.onUsersChanged?.();
     });
 
     return () => unsubscribe();
+    // Subscription lifecycle intentionally follows authentication state only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
 }

@@ -1,16 +1,24 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
-import {VitePWA} from 'vite-plugin-pwa';
+import { defineConfig } from 'vite';
+import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
+  const isProduction = process.env.NODE_ENV === 'production';
+
   return {
+    base: '/',
     plugins: [
       react(),
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
+        // Keep the service worker out of AI Studio/local development previews.
+        // It is enabled automatically for production builds.
+        devOptions: {
+          enabled: false,
+        },
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         manifest: {
           id: '/',
@@ -42,13 +50,10 @@ export default defineConfig(() => {
               purpose: 'maskable',
             },
           ],
+          ...(isProduction ? {} : {}),
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
-        },
-        devOptions: {
-          enabled: true,
-          type: 'module',
         },
       }),
     ],

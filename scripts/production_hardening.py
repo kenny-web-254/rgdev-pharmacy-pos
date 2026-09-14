@@ -326,6 +326,6 @@ a = replace_required(
 # The old cloud fallback message claimed local-only operation; production must never pretend local persistence is a server.
 a = a.replace("Cleared ${count} offline transaction${count > 1 ? 's' : ''} (no database configured, saved locally only).", "Cannot synchronize offline transactions because the database is not configured.")
 
-a_path.write_text(a)
+app_path.write_text(a)
 
 print('Production hardening transformations completed successfully.')

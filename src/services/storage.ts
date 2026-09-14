@@ -677,11 +677,14 @@ export const storageService = {
   },
 
   // Active User / Auth
+  //
+  // SECURITY: This must NEVER fall back to "the first known user" or a
+  // demo account. It only returns a user that was explicitly placed here
+  // by a successful `saveActiveUser()` call after real authentication
+  // (see `signInWithSupabase` / `signUpInitialAdmin` in services/supabase.ts).
+  // Absence of a session here means "signed out" - full stop.
   getActiveUser(): User | null {
     try {
-      if (localStorage.getItem(STORAGE_KEYS.LOGGED_OUT) === 'true') {
-        return null;
-      }
       const data = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER);
       if (data) {
         const parsed = JSON.parse(data);
@@ -690,8 +693,7 @@ export const storageService = {
     } catch (e) {
       console.error('Failed to load active user', e);
     }
-    const all = this.getUsers();
-    return all[0] || DEMO_USERS[0];
+    return null;
   },
 
   saveActiveUser(user: User): void {
@@ -722,54 +724,12 @@ export const storageService = {
     }
   },
 
-  authenticateUser(username: string, passwordInput: string): { success: boolean; user?: User; error?: string } {
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanPassword = passwordInput.trim();
-
-    if (!cleanUsername) {
-      return { success: false, error: 'Please enter your username.' };
-    }
-    if (!cleanPassword) {
-      return { success: false, error: 'Please enter your password.' };
-    }
-
-    const allUsers = this.getUsers();
-    const matched = allUsers.find((u) => u.username.toLowerCase() === cleanUsername);
-
-    if (!matched) {
-      return { success: false, error: 'Invalid username or credentials.' };
-    }
-
-    if (matched.status === 'inactive') {
-      return { success: false, error: 'This account has been deactivated. Please contact an Administrator.' };
-    }
-
-    const expectedPassword = matched.password || matched.username;
-    if (cleanPassword !== expectedPassword) {
-      return { success: false, error: 'Incorrect password for this account.' };
-    }
-
-    // Update lastLogin
-    const updatedUser: User = {
-      ...matched,
-      lastLogin: new Date().toISOString(),
-    };
-
-    const updatedList = allUsers.map((u) => (u.id === matched.id ? updatedUser : u));
-    this.saveUsers(updatedList);
-    this.saveActiveUser(updatedUser);
-
-    this.addAuditLog({
-      userId: updatedUser.id,
-      userName: updatedUser.name,
-      userRole: updatedUser.role,
-      action: 'USER_LOGIN',
-      details: `User authenticated and signed into account (@${updatedUser.username})`,
-      category: 'AUTH',
-    });
-
-    return { success: true, user: updatedUser };
-  },
+  // NOTE: The previous local, plaintext-password `authenticateUser()` method
+  // has been removed. It is not called anywhere in the app (LoginView calls
+  // `signInWithSupabase()` in services/supabase.ts) and comparing passwords
+  // against a value stored in a client-readable table is exactly the "fake
+  // authentication" / "local database authority" pattern real auth must not
+  // use. Real credential checking now happens server-side via Supabase Auth.
 
   // Reset business data: deletes all stock, sales, prescriptions, and app activity logs while strictly preserving shop details (name, address, tax PIN, logo, receipt config) and user accounts
   resetBusinessData(adminUser?: { id: string; name: string; role: string }): void {
@@ -929,6 +889,22 @@ export const storageService = {
       return null;
     }
   },
+
+  async pushTransactionToCloud(t: SaleTransaction): Promise<boolean> {
+    const client = getSupabase();
+    if (!client) return false;
+    try {
+      const { error } = await client.from('sale_transactions').upsert(transactionToRow(t));
+      if (error) {
+        console.error('Cloud sync failed (transaction upsert)', error);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.error('Cloud sync failed (transaction upsert)', e);
+      return false;
+    }
+  },
 };
 
 // ------------------------------------------------------------------
@@ -1064,5 +1040,35 @@ function rowToTest(r: any): MedicalTest {
     resultSummary: r.result_summary || undefined,
     resultDate: r.result_date || undefined,
     linkedPrescriptionId: r.linked_prescription_id || undefined,
+  };
+}
+
+function transactionToRow(t: SaleTransaction) {
+  return {
+    id: t.id,
+    receipt_number: t.receiptNumber,
+    timestamp: t.timestamp,
+    cashier_name: t.cashierName,
+    cashier_role: t.cashierRole,
+    items: t.items,
+    subtotal: t.subtotal,
+    tax: t.tax,
+    discount: t.discount,
+    total: t.total,
+    payment_method: t.paymentMethod,
+    amount_tendered: t.amountTendered ?? null,
+    change_due: t.changeDue ?? null,
+    cash_amount: t.cashAmount ?? null,
+    mpesa_amount: t.mpesaAmount ?? null,
+    mpesa_reference: t.mpesaReference ?? null,
+    mpesa_phone: t.mpesaPhone ?? null,
+    patient_name: t.patientName ?? null,
+    card_auth_code: t.cardAuthCode ?? null,
+    insurance_provider: t.insuranceProvider ?? null,
+    insurance_policy_number: t.insurancePolicyNumber ?? null,
+    insurance_auth_code: t.insuranceAuthCode ?? null,
+    is_offline: t.isOffline,
+    synced: true,
+    sync_timestamp: new Date().toISOString(),
   };
 }

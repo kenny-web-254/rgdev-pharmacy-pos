@@ -21,7 +21,7 @@ import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
-import { supabaseConfig } from './services/supabase';
+import { supabaseConfig, checkBootstrapAvailable, signOutSupabase } from './services/supabase';
 import {
   AppNavTab,
   AuditLog,
@@ -41,7 +41,7 @@ import { CheckCircle2, Info, Lock, ShieldAlert } from 'lucide-react';
 
 // Session security: auto-logout after this many minutes of inactivity, with
 // a warning toast shown shortly before the session actually ends.
-const SESSION_TIMEOUT_MINUTES = 15;
+const SESSION_TIMEOUT_MINUTES = 30;
 const SESSION_WARNING_SECONDS = 60;
 
 // Role-based tab access: admin can access everything. Clinicians handle
@@ -60,6 +60,7 @@ export default function App() {
   // Navigation & Role State
   const [activeTab, setActiveTab] = useState<AppNavTab>('pos');
   const [currentUser, setCurrentUser] = useState<User | null>(() => storageService.getActiveUser());
+  const [isBootstrapAvailable, setIsBootstrapAvailable] = useState(false);
   const [users, setUsers] = useState<User[]>(() => storageService.getUsers());
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => storageService.getAuditLogs());
 
@@ -239,8 +240,27 @@ export default function App() {
   const handleLogout = () => {
     storageService.logoutActiveUser(currentUser);
     setCurrentUser(null);
+    void signOutSupabase();
     showToast('Signed out of session.', 'info');
   };
+
+  // First-run setup: while logged out, check whether any administrator
+  // account exists yet so LoginView can offer the bootstrap "create
+  // administrator" form instead of a sign-in form nobody could pass.
+  useEffect(() => {
+    if (currentUser || !supabaseConfig.isConfigured()) {
+      setIsBootstrapAvailable(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const available = await checkBootstrapAvailable();
+      if (!cancelled) setIsBootstrapAvailable(available);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
 
   // Security: auto-logout after a period of inactivity. Runs only while a
   // user is signed in, and resets on any mouse/keyboard/touch/scroll activity.
@@ -253,6 +273,7 @@ export default function App() {
       if (currentUser) {
         storageService.logoutActiveUser(currentUser);
         setCurrentUser(null);
+        void signOutSupabase();
         showToast('You were signed out automatically after a period of inactivity.', 'info');
       }
     },
@@ -334,26 +355,62 @@ export default function App() {
       return;
     }
 
+    // Without a configured Supabase project there is no server to sync to;
+    // fall back to just clearing local "offline" flags so the UI queue
+    // doesn't grow unbounded while running in local-only/demo mode.
+    if (!supabaseConfig.isConfigured()) {
+      const count = offlineQueue.length;
+      const localOnlySynced = transactions.map((tx) =>
+        tx.isOffline ? { ...tx, isOffline: false, synced: false } : tx
+      );
+      setTransactions(localOnlySynced);
+      storageService.saveTransactions(localOnlySynced);
+      setOfflineQueue([]);
+      storageService.clearOfflineQueue();
+      showToast(
+        `Cleared ${count} offline transaction${count > 1 ? 's' : ''} (no database configured, saved locally only).`,
+        'info'
+      );
+      return;
+    }
+
     const count = offlineQueue.length;
-    const syncedTransactions = transactions.map((tx) => {
-      if (tx.isOffline) {
-        return {
-          ...tx,
-          isOffline: false,
-          synced: true,
-          syncTimestamp: new Date().toISOString(),
-        };
+
+    (async () => {
+      const results = await Promise.all(offlineQueue.map((tx) => storageService.pushTransactionToCloud(tx)));
+      const succeededIds = new Set(offlineQueue.filter((_, i) => results[i]).map((tx) => tx.id));
+      const failedCount = count - succeededIds.size;
+
+      const syncedTransactions = transactions.map((tx) => {
+        if (tx.isOffline && succeededIds.has(tx.id)) {
+          return {
+            ...tx,
+            isOffline: false,
+            synced: true,
+            syncTimestamp: new Date().toISOString(),
+          };
+        }
+        return tx;
+      });
+
+      setTransactions(syncedTransactions);
+      storageService.saveTransactions(syncedTransactions);
+
+      const remainingQueue = offlineQueue.filter((tx) => !succeededIds.has(tx.id));
+      setOfflineQueue(remainingQueue);
+      storageService.saveOfflineQueue(remainingQueue);
+
+      if (succeededIds.size > 0) {
+        showToast(
+          `Synced ${succeededIds.size} offline transaction${succeededIds.size > 1 ? 's' : ''} to the server${
+            failedCount > 0 ? `, ${failedCount} still pending` : ''
+          }.`,
+          failedCount > 0 ? 'warning' : 'success'
+        );
+      } else {
+        showToast('Unable to synchronize changes. Will retry when connectivity is restored.', 'warning');
       }
-      return tx;
-    });
-
-    setTransactions(syncedTransactions);
-    storageService.saveTransactions(syncedTransactions);
-
-    setOfflineQueue([]);
-    storageService.clearOfflineQueue();
-
-    showToast(`Successfully synced ${count} offline transaction${count > 1 ? 's' : ''} with server!`, 'success');
+    })();
   };
 
   // Automatic sync when connection is restored
@@ -792,6 +849,9 @@ export default function App() {
     const newTxList = [transaction, ...transactions];
     setTransactions(newTxList);
     storageService.saveTransactions(newTxList);
+    if (!transaction.isOffline) {
+      storageService.pushTransactionToCloud(transaction);
+    }
 
     // 4. Log Audit Trail with strict Batch association
     if (currentUser) {
@@ -936,6 +996,7 @@ export default function App() {
         <LoginView
           onLogin={handleLogin}
           pharmacyName={receiptSettings.pharmacyName}
+          isBootstrapAvailable={isBootstrapAvailable}
         />
       </>
     );

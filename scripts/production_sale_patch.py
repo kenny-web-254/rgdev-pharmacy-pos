@@ -27,3 +27,9 @@ if count != 1:
     raise SystemExit('Could not locate pushTransactionToCloud')
 p.write_text(new)
 print('Atomic sale RPC integration applied.')
+
+# Apply the second-stage transaction-flow hardening in the same build step.
+transaction_flow = Path('scripts/production_sale_transaction_flow.py')
+if not transaction_flow.exists():
+    raise SystemExit('Missing production_sale_transaction_flow.py')
+exec(compile(transaction_flow.read_text(), str(transaction_flow), 'exec'), {'__name__': '__main__'})

@@ -19,6 +19,10 @@ p = p.replace(
     '  onCompleteSale: (transaction: SaleTransaction) => Promise<boolean> | boolean;'
 )
 
+# Both checkout handlers must be async because the authoritative save is asynchronous.
+p = p.replace('  const handleQuickCashCheckout = () => {', '  const handleQuickCashCheckout = async () => {')
+p = p.replace('  const handleConfirmSale = () => {', '  const handleConfirmSale = async () => {')
+
 # Quick cash path: await the authoritative sale result before clearing the cart.
 p = replace_required(
     p,
@@ -36,7 +40,7 @@ p = replace_required(
     flags=re.S,
 )
 
-# The normal checkout handler is the same transaction pattern, but appears a second time.
+# The normal checkout handler has the same transaction pattern.
 p = replace_required(
     p,
     r"      onCompleteSale\(transaction\);\n      onUpdateCart\(\[\]\);\n      storageService\.clearCart\(\);\n      setIsCheckoutOpen\(false\);\n      handlePatientNameChange\(''\);",
@@ -58,7 +62,7 @@ post_path.write_text(p)
 # ------------------------------------------------------------------
 # App: make online sales cloud-first. A failed RPC must not mutate the
 # local stock/transaction state or display a successful sale receipt.
-# Offline sales remain explicitly queued for later synchronization.
+# Offline sales remain explicitly queued for later atomic cloud sync.
 # ------------------------------------------------------------------
 app_path = Path('src/App.tsx')
 a = app_path.read_text()

@@ -3,6 +3,20 @@ import re
 
 
 def replace_required(text, pattern, replacement, label, flags=re.S):
+    # The repository now contains the hardened Supabase Auth implementation.
+    # Keep the transform idempotent so Vercel builds do not fail when those
+    # production-safe changes are already present in source control.
+    app_hardening_labels = {
+        'App auth state',
+        'refreshUsersAndLogs',
+        'handleLogout',
+        'auth bootstrap',
+        'auth-ready render guard',
+    }
+    if label in app_hardening_labels and (
+        'authReady' in text or 'getAuthenticatedProfile' in text
+    ):
+        return text
     new, count = re.subn(pattern, replacement, text, count=1, flags=flags)
     if count != 1:
         raise SystemExit(f'REQUIRED TRANSFORM FAILED: {label}')

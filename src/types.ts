@@ -83,7 +83,7 @@ export interface SaleTransaction {
   id: string; receiptNumber: string; timestamp: string; cashierName: string; cashierRole: UserRole;
   items: { medicationId: string; name: string; genericName: string; dosage: string; isPrescription: boolean; rxNumber?: string; patientName?: string;
     quantity: number; unitPrice: number; totalPrice: number; prescriptionItemId?: string; batchNumber?: string; expiryDate?: string; saleUnit?: string; saleAsPack?: boolean; packSize?: number; }[];
-  subtotal: number; discount: number; total: number; paymentMethod: PaymentMethod; amountTendered?: number; changeDue?: number;
+  subtotal: number; discount: number; total: number; prescriptionId?: string; patientId?: string; paymentMethod: PaymentMethod; amountTendered?: number; changeDue?: number;
   cashAmount?: number; mpesaAmount?: number; mpesaReference?: string; mpesaPhone?: string; patientName?: string; cardAuthCode?: string;
   insuranceProvider?: string; insurancePolicyNumber?: string; insuranceAuthCode?: string; isOffline: boolean; synced: boolean; syncTimestamp?: string;
 }

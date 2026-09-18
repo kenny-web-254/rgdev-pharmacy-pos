@@ -209,3 +209,18 @@ begin
   return jsonb_build_object('ok',true,'idempotent',false,'sale_id',v_inserted.id);
 end;
 $$;
+
+
+-- Remove duplicate indexes left by earlier clinic migrations and add the
+-- two missing foreign-key covering indexes flagged by Supabase.
+drop index if exists public.idx_consult_visit;
+drop index if exists public.idx_patients_name;
+drop index if exists public.idx_patients_phone;
+drop index if exists public.patients_patient_number_unique_idx;
+drop index if exists public.idx_rxitems_rx;
+drop index if exists public.idx_rx_patient;
+drop index if exists public.idx_rx_visit;
+drop index if exists public.idx_visits_patient;
+
+create index if not exists sale_transactions_patient_id_idx on public.sale_transactions(patient_id);
+create index if not exists visits_created_by_idx on public.visits(created_by);

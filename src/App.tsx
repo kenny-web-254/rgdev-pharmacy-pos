@@ -742,61 +742,82 @@ export default function App() {
   };
 
   const handleDispensePrescriptionToCart = (rx: Prescription) => {
-    const med = medications.find((m) => m.id === rx.medicationId);
-    if (!med) {
-      alert('Associated medication not found in pharmacy inventory.');
+    const lines = rx.items && rx.items.length > 0
+      ? rx.items.filter((item) => item.quantityPrescribed - item.quantityDispensedSoFar > 0)
+      : [{
+          id: `legacy-${rx.id}`,
+          medicationId: rx.medicationId || '',
+          medicationName: rx.medicationName,
+          dosageInstructions: rx.dosageInstructions || '',
+          quantityPrescribed: rx.quantityPrescribed,
+          quantityDispensedSoFar: rx.quantityDispensedSoFar || 0,
+          refillsAllowed: rx.refillsAllowed || 0,
+          refillsRemaining: rx.refillsRemaining || 0,
+        }];
+
+    if (lines.length === 0) {
+      showToast(`Prescription ${rx.rxNumber} has no remaining quantities to dispense.`, 'warning');
       return;
     }
 
-    if (med.stock < rx.quantityPrescribed) {
-      alert(`Insufficient stock! ${rx.quantityPrescribed} prescribed, but only ${med.stock} on shelf.`);
-      return;
-    }
-
-    // Co-pay discount
     const itemDiscount = rx.insuranceCoPayRate !== undefined ? (1 - rx.insuranceCoPayRate) * 100 : 0;
+    const additions: CartItem[] = [];
 
-    const existingIndex = activePOSTab.cart.findIndex(
-      (item) => item.medication.id === med.id && item.prescriptionId === rx.id
+    for (const line of lines) {
+      const med = medications.find((m) => m.id === line.medicationId);
+      if (!med) {
+        showToast(`Medication record for "${line.medicationName}" is missing from current inventory.`, 'warning');
+        return;
+      }
+      const remaining = Math.max(0, line.quantityPrescribed - line.quantityDispensedSoFar);
+      if (med.stock < remaining) {
+        showToast(`Insufficient stock for ${med.name}: ${remaining} required, ${med.stock} available.`, 'warning');
+        return;
+      }
+      const alreadyInCart = activePOSTab.cart.some(
+        (item) => item.prescriptionId === rx.id && item.prescriptionItemId === line.id
+      );
+      if (!alreadyInCart) {
+        additions.push({
+          medication: med,
+          quantity: remaining,
+          prescriptionId: rx.id,
+          prescriptionItemId: line.id,
+          rxNumber: rx.rxNumber,
+          patientName: rx.patientName,
+          discountPercent: itemDiscount,
+        });
+      }
+    }
+
+    if (additions.length === 0) {
+      showToast(`Prescription ${rx.rxNumber} is already in the active checkout.`, 'info');
+      setActiveTab('pos');
+      return;
+    }
+
+    const updatedCart = [...activePOSTab.cart, ...additions];
+    setPosTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== activePOSTab.id) return t;
+        const isGeneric = /^Tab \d+$/i.test(t.name);
+        const tabName = isGeneric ? `${t.name}: ${rx.patientName}` : t.name;
+        return {
+          ...t,
+          cart: updatedCart,
+          patientName: t.patientName || rx.patientName,
+          name: tabName,
+          isParked: false,
+          updatedAt: Date.now(),
+        };
+      })
     );
 
-    if (existingIndex > -1) {
-      showToast(`Prescription ${rx.rxNumber} already in active tab "${activePOSTab.name}".`, 'info');
-    } else {
-      const newItem: CartItem = {
-        medication: med,
-        quantity: rx.quantityPrescribed,
-        prescriptionId: rx.id,
-        rxNumber: rx.rxNumber,
-        patientName: rx.patientName,
-        discountPercent: itemDiscount,
-      };
-      const updatedCart = [...activePOSTab.cart, newItem];
-      setPosTabs((prev) =>
-        prev.map((t) => {
-          if (t.id === activePOSTab.id) {
-            const isGeneric = /^Tab \d+$/i.test(t.name);
-            const tabName = isGeneric ? `${t.name}: ${rx.patientName}` : t.name;
-            return {
-              ...t,
-              cart: updatedCart,
-              patientName: t.patientName || rx.patientName,
-              name: tabName,
-              isParked: false,
-              updatedAt: Date.now(),
-            };
-          }
-          return t;
-        })
-      );
-      playScanSuccessBeep();
-      showToast(
-        `Prescription ${rx.rxNumber} dispensed to "${activePOSTab.name}" (${itemDiscount.toFixed(0)}% co-pay applied).`,
-        'success'
-      );
-    }
-
-    // Switch to POS checkout tab so cashier can tender immediately
+    playScanSuccessBeep();
+    showToast(
+      `Prescription ${rx.rxNumber} loaded: ${additions.length} medication line(s) for ${rx.patientName}.`,
+      'success'
+    );
     setActiveTab('pos');
   };
 

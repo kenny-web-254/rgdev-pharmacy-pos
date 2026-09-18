@@ -731,7 +731,7 @@ export const storageService = {
   // authentication" / "local database authority" pattern real auth must not
   // use. Real credential checking now happens server-side via Supabase Auth.
 
-  // Reset business data: deletes all stock, sales, prescriptions, and app activity logs while strictly preserving shop details (name, address, tax PIN, logo, receipt config) and user accounts
+  // Reset business data: deletes all stock, sales, prescriptions, and app activity logs while strictly preserving shop details (name, address, logo, receipt config) and user accounts
   resetBusinessData(adminUser?: { id: string; name: string; role: string }): void {
     // 1. Snapshot current shop profile & identity settings to ensure absolute retention
     const preservedShopSettings = this.getReceiptSettings();
@@ -1052,7 +1052,6 @@ function transactionToRow(t: SaleTransaction) {
     cashier_role: t.cashierRole,
     items: t.items,
     subtotal: t.subtotal,
-    tax: t.tax,
     discount: t.discount,
     total: t.total,
     payment_method: t.paymentMethod,

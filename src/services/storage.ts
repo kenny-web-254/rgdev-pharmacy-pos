@@ -894,14 +894,17 @@ export const storageService = {
     const client = getSupabase();
     if (!client) return false;
     try {
-      const { error } = await client.from('sale_transactions').upsert(transactionToRow(t));
-      if (error) {
-        console.error('Cloud sync failed (transaction upsert)', error);
+      const { data, error } = await client.rpc('complete_sale', {
+        p_transaction: transactionToRow(t),
+      });
+      if (error || !data?.ok) {
+        const detail = error?.message || (data ? JSON.stringify(data) : 'No response from complete_sale RPC');
+        console.error('Atomic sale synchronization failed:', detail);
         return false;
       }
       return true;
     } catch (e) {
-      console.error('Cloud sync failed (transaction upsert)', e);
+      console.error('Atomic sale synchronization failed:', e instanceof Error ? e.message : String(e));
       return false;
     }
   },

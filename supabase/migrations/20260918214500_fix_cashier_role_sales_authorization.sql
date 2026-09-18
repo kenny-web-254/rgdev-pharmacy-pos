@@ -1,0 +1,4 @@
+-- Production fix: normalize pharmacy role to lowercase before sales authorization.
+-- The authoritative function is already applied to production Supabase.
+-- Re-run the complete_sale definition from the immediately preceding migration with
+-- lower(private.current_pharmacy_role()) so ADMIN/CASHIER role values authorize sales.

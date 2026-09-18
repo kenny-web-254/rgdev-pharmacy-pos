@@ -46,7 +46,7 @@ interface POSTerminalProps {
   prescriptions: Prescription[];
   cart: CartItem[];
   onUpdateCart: (newCart: CartItem[]) => void;
-  onCompleteSale: (transaction: SaleTransaction) => void;
+  onCompleteSale: (transaction: SaleTransaction) => Promise<boolean> | boolean;
   onOpenScanner: () => void;
   receiptSettings: ReceiptSettings;
   isOnline: boolean;
@@ -504,7 +504,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   };
 
   // One-Click Fast Cash Checkout for straight-forward OTC transactions
-  const handleQuickCashCheckout = () => {
+  const handleQuickCashCheckout = async () => {
     if (cart.length === 0 || isSubmitting) return;
 
     // Safety check for expired medications
@@ -564,7 +564,11 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
         syncTimestamp: isOnline ? new Date().toISOString() : undefined,
       };
 
-      onCompleteSale(transaction);
+      const saved = await onCompleteSale(transaction);
+      if (!saved) {
+        setCheckoutError('Sale was not saved. No stock was finalized and the cart has been kept for retry.');
+        return;
+      }
       onUpdateCart([]);
       storageService.clearCart();
       setIsCheckoutOpen(false);
@@ -595,7 +599,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   };
 
   // Finalize Sale with duplicate submission guard
-  const handleConfirmSale = () => {
+  const handleConfirmSale = async () => {
     if (isSubmitting) return;
     setCheckoutError(null);
 
@@ -729,7 +733,11 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
         syncTimestamp: isOnline ? new Date().toISOString() : undefined,
       };
 
-      onCompleteSale(transaction);
+      const saved = await onCompleteSale(transaction);
+      if (!saved) {
+        setCheckoutError('Sale was not saved. No stock was finalized and the cart has been kept for retry.');
+        return;
+      }
       onUpdateCart([]);
       storageService.clearCart();
       setIsCheckoutOpen(false);

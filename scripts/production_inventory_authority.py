@@ -15,7 +15,7 @@ storage_path = Path('src/services/storage.ts')
 s = storage_path.read_text(encoding='utf-8')
 
 if 'async resetBusinessDataFromCloud' not in s:
-    marker = '  // Reset business data: deletes all stock, sales, prescriptions, and app activity logs while strictly preserving shop details (name, address, tax PIN, logo, receipt config) and user accounts\n'
+    marker = '  resetBusinessData(adminUser?: { id: string; name: string; role: string }): void {\n'
     if marker not in s:
         raise SystemExit('REQUIRED TRANSFORM FAILED: resetBusinessData anchor')
     method = '''  async resetBusinessDataFromCloud(): Promise<boolean> {

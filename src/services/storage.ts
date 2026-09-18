@@ -858,7 +858,7 @@ export const storageService = {
     const client = getSupabase();
     if (!client) return null;
     try {
-      const { data, error } = await client.from('prescriptions').select('*');
+      const { data, error } = await client.from('prescriptions').select('*, prescription_items(*)');
       if (error || !data) return null;
       return data.map(rowToPrescription);
     } catch (e) {
@@ -983,10 +983,25 @@ function prescriptionToRow(p: Prescription) {
 }
 
 function rowToPrescription(r: any): Prescription {
+  const items = Array.isArray(r.prescription_items)
+    ? r.prescription_items.map((i: any) => ({
+        id: i.id,
+        medicationId: i.medication_id,
+        medicationName: i.medication_name,
+        dosageInstructions: [i.dosage, i.frequency, i.duration].filter(Boolean).join(' '),
+        quantityPrescribed: Number(i.quantity),
+        quantityDispensedSoFar: Number(i.quantity_dispensed || 0),
+        refillsAllowed: 0,
+        refillsRemaining: 0,
+      }))
+    : undefined;
   return {
     id: r.id,
     rxNumber: r.rx_number,
     barcode: r.barcode,
+    patientId: r.patient_id || undefined,
+    visitId: r.visit_id || undefined,
+    consultationId: r.consultation_id || undefined,
     patientName: r.patient_name,
     patientDOB: r.patient_dob,
     patientPhone: r.patient_phone,
@@ -997,14 +1012,15 @@ function rowToPrescription(r: any): Prescription {
     medicationName: r.medication_name,
     dosageInstructions: r.dosage_instructions,
     quantityPrescribed: Number(r.quantity_prescribed),
-    quantityDispensedSoFar: Number(r.quantity_dispensed_so_far),
-    refillsAllowed: Number(r.refills_allowed),
-    refillsRemaining: Number(r.refills_remaining),
+    quantityDispensedSoFar: Number(r.quantity_dispensed_so_far || 0),
+    refillsAllowed: Number(r.refills_allowed || 0),
+    refillsRemaining: Number(r.refills_remaining || 0),
     dateIssued: r.date_issued,
     expiryDate: r.expiry_date,
     status: r.status,
     insuranceProvider: r.insurance_provider || undefined,
     insuranceCoPayRate: r.insurance_co_pay_rate ?? undefined,
+    items,
   };
 }
 

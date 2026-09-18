@@ -462,9 +462,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   }, 0);
 
   const cartDiscount = (subtotal * discountPercent) / 100;
-  const taxableAmount = Math.max(0, subtotal - cartDiscount);
-  const tax = taxableAmount * (receiptSettings.taxRate || 0.16);
-  const total = Math.round((taxableAmount + tax) * 100) / 100;
+  const total = Math.round(Math.max(0, subtotal - cartDiscount) * 100) / 100;
 
   // Change calculations depending on payment method
   let changeDue = 0;
@@ -554,7 +552,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           expiryDate: it.medication.expiryDate || 'N/A',
         })),
         subtotal,
-        tax,
+        tax: 0,
         discount: cartDiscount,
         total,
         paymentMethod: 'Cash',

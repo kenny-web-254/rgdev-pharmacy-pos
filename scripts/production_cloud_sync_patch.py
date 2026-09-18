@@ -12,13 +12,14 @@ p = Path('src/App.tsx')
 a = p.read_text()
 
 # production_hardening.py runs first and has already converted the auth import.
-a = replace_required(
-    a,
-    r"import \{ supabaseConfig, signOutSupabase, getAuthenticatedProfile, onSupabaseAuthStateChange \} from './services/supabase';",
-    "import { supabaseConfig, signOutSupabase, getAuthenticatedProfile, onSupabaseAuthStateChange, pullSaleTransactionsFromSupabase, pullReceiptSettingsFromSupabase } from './services/supabase';",
-    'cloud sync imports',
-    flags=0,
-)
+if 'pullSaleTransactionsFromSupabase' not in a:
+    a = replace_required(
+        a,
+        r"import \{ ([^}]+) \} from './services/supabase';",
+        lambda m: "import { " + m.group(1) + ", pullSaleTransactionsFromSupabase, pullReceiptSettingsFromSupabase } from './services/supabase';",
+        'cloud sync imports',
+        flags=0,
+    )
 
 hydration_block = """  // Cloud hydration: Supabase is authoritative for operational data.
   // Browser storage may retain carts/drafts for continuity, but it never wins over the server.

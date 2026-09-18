@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { ClinicalTest, Consultation, Patient, Prescription, ReceiptSettings, SaleTransaction, User, UserRole } from '../types';
+import { ClinicalTest, Consultation, Patient, Prescription, PrescriptionItem, ReceiptSettings, SaleTransaction, User, UserRole, Visit } from '../types';
 const envUrl=(import.meta.env.VITE_SUPABASE_URL||(typeof process!=='undefined'?process.env?.SUPABASE_URL:'')||'') as string;
 const envAnonKey=(import.meta.env.VITE_SUPABASE_ANON_KEY||(typeof process!=='undefined'?process.env?.SUPABASE_ANON_KEY:'')||'') as string;
 let runtimeUrl=envUrl; let runtimeAnonKey=envAnonKey; let supabaseInstance:SupabaseClient|null=null;
@@ -26,10 +26,63 @@ export async function setManagedUserStatus(userId:string,status:'active'|'inacti
 export async function resetManagedUserPassword(userId:string,password:string){return invokeAdminUserFunction({action:'reset_password',userId,password});}
 export async function deleteManagedUser(userId:string){return invokeAdminUserFunction({action:'delete',userId});}
 function patientToRow(p:Patient){return{id:p.id,full_name:p.fullName,dob:p.dob,gender:p.gender,phone:p.phone,email:p.email||null,address:p.address||null,allergies:p.allergies||[],insurance_provider:p.insuranceProvider||null,insurance_policy_number:p.insurancePolicyNumber||null};}
-export async function upsertPatientToSupabase(p:Patient){const c=getSupabase();if(!c)return false;const{error}=await c.from('patients').upsert(patientToRow(p));return!error;}
-export async function insertConsultationToSupabase(x:Consultation){const c=getSupabase();if(!c)return false;const{error}=await c.from('consultations').insert({id:x.id,patient_id:x.patientId,patient_name:x.patientName,clinician_id:x.clinicianId,clinician_name:x.clinicianName,date:x.date,symptoms:x.symptoms,diagnosis:x.diagnosis,notes:x.notes||null,vitals:x.vitals||{}});return!error;}
+
+function rowToPatient(r:any):Patient{return{id:r.id,patientNumber:r.patient_number||undefined,fullName:r.full_name,dob:r.dob,gender:r.gender,phone:r.phone,email:r.email||undefined,address:r.address||undefined,allergies:Array.isArray(r.allergies)?r.allergies:[],insuranceProvider:r.insurance_provider||undefined,insurancePolicyNumber:r.insurance_policy_number||undefined,createdAt:r.created_at};}
+function rowToVisit(r:any):Visit{return{id:r.id,patientId:r.patient_id,visitNumber:r.visit_number,visitDate:r.visit_date,status:r.status,createdAt:r.created_at,updatedAt:r.updated_at};}
+function rowToConsultation(r:any):Consultation{return{id:r.id,patientId:r.patient_id,visitId:r.visit_id,patientName:r.patient_name,clinicianId:r.clinician_id,clinicianName:r.clinician_name,date:r.date,symptoms:r.symptoms,diagnosis:r.diagnosis,notes:r.notes||undefined,vitals:r.vitals||{},createdAt:r.created_at};}
+function rowToClinicalTest(r:any):ClinicalTest{return{id:r.id,consultationId:r.consultation_id||undefined,patientId:r.patient_id,patientName:r.patient_name||undefined,testName:r.test_name,category:r.category,status:r.status,results:r.results||undefined,referenceRanges:r.reference_ranges||undefined,notes:r.notes||undefined,requestedBy:r.requested_by,conductedAt:r.conducted_at||undefined,createdAt:r.created_at};}
+
+export async function registerPatientToSupabase(p:Patient):Promise<{ok:boolean;patient?:Patient;existing?:boolean;error?:string}>{
+  const c=getSupabase(); if(!c) return {ok:false,error:'Supabase is not configured.'};
+  const {data,error}=await c.rpc('register_patient',{p:{
+    id:p.id,full_name:p.fullName,dob:p.dob,gender:p.gender,phone:p.phone,email:p.email||null,address:p.address||null,
+    allergies:p.allergies||[],insurance_provider:p.insuranceProvider||null,insurance_policy_number:p.insurancePolicyNumber||null
+  }});
+  if(error||!data?.ok) return {ok:false,error:error?.message||'Unable to register patient.'};
+  return {ok:true,existing:Boolean(data.existing),patient:data.patient?rowToPatient(data.patient):undefined};
+}
+
+export async function pullPatientsFromSupabase():Promise<Patient[]|null>{const c=getSupabase();if(!c)return null;const{data,error}=await c.from('patients').select('*').order('created_at',{ascending:false});if(error||!data)return null;return data.map(rowToPatient);}
+export async function pullVisitsFromSupabase():Promise<Visit[]|null>{const c=getSupabase();if(!c)return null;const{data,error}=await c.from('visits').select('*').order('visit_date',{ascending:false});if(error||!data)return null;return data.map(rowToVisit);}
+export async function pullConsultationsFromSupabase():Promise<Consultation[]|null>{const c=getSupabase();if(!c)return null;const{data,error}=await c.from('consultations').select('*').order('date',{ascending:false});if(error||!data)return null;return data.map(rowToConsultation);}
+export async function pullClinicalTestsFromSupabase():Promise<ClinicalTest[]|null>{const c=getSupabase();if(!c)return null;const{data,error}=await c.from('clinical_tests').select('*').order('created_at',{ascending:false});if(error||!data)return null;return data.map(rowToClinicalTest);}
+
+export async function startVisitForPatient(patientId:string):Promise<{ok:boolean;visit?:Visit;error?:string}>{
+  const c=getSupabase();if(!c)return{ok:false,error:'Supabase is not configured.'};
+  const{data,error}=await c.rpc('start_visit',{p_patient_id:patientId});
+  if(error||!data?.ok)return{ok:false,error:error?.message||'Unable to start visit.'};
+  const visitId=String(data.id);
+  const{data:row,error:readError}=await c.from('visits').select('*').eq('id',visitId).single();
+  if(readError||!row)return{ok:false,error:readError?.message||'Visit was created but could not be loaded.'};
+  return{ok:true,visit:rowToVisit(row)};
+}
+
+export async function setVisitStatusInSupabase(visitId:string,status:'COMPLETED'|'CANCELLED'):Promise<boolean>{const c=getSupabase();if(!c)return false;const{error}=await c.rpc('set_visit_status',{p_visit_id:visitId,p_status:status});return!error;}
+
+export async function insertConsultationToSupabase(x:Consultation){
+  const c=getSupabase();if(!c)return false;
+  const{error}=await c.from('consultations').insert({id:x.id,patient_id:x.patientId,visit_id:x.visitId,patient_name:x.patientName,clinician_id:x.clinicianId,clinician_name:x.clinicianName,date:x.date,symptoms:x.symptoms,diagnosis:x.diagnosis,notes:x.notes||null,vitals:x.vitals||{}});
+  return!error;
+}
+
 export async function upsertClinicalTestToSupabase(x:ClinicalTest){const c=getSupabase();if(!c)return false;const{error}=await c.from('clinical_tests').upsert({id:x.id,consultation_id:x.consultationId||null,patient_id:x.patientId,patient_name:x.patientName||null,test_name:x.testName,category:x.category,status:x.status,results:x.results||null,reference_ranges:x.referenceRanges||null,notes:x.notes||null,requested_by:x.requestedBy,conducted_at:x.conductedAt||null});return!error;}
-export async function upsertPrescriptionToSupabase(x:Prescription){const c=getSupabase();if(!c)return false;const{error}=await c.from('prescriptions').upsert({id:x.id,rx_number:x.rxNumber,barcode:x.barcode,patient_name:x.patientName,patient_dob:x.patientDOB,patient_phone:x.patientPhone,doctor_name:x.doctorName,doctor_license:x.doctorLicense,doctor_clinic:x.doctorClinic,medication_id:x.medicationId||null,medication_name:x.medicationName,dosage_instructions:x.dosageInstructions||'',quantity_prescribed:x.quantityPrescribed||0,quantity_dispensed_so_far:x.quantityDispensedSoFar||0,refills_allowed:x.refillsAllowed||0,refills_remaining:x.refillsRemaining||0,date_issued:x.dateIssued,expiry_date:x.expiryDate,status:x.status,insurance_provider:x.insuranceProvider||null,insurance_co_pay_rate:x.insuranceCoPayRate||0});return!error;}
+
+export async function createClinicalPrescriptionToSupabase(parent:Prescription,items:PrescriptionItem[]):Promise<{ok:boolean;error?:string}>{
+  const c=getSupabase();if(!c)return{ok:false,error:'Supabase is not configured.'};
+  if(!parent.patientId||!parent.visitId)return{ok:false,error:'Prescription must be linked to a patient and active visit.'};
+  const payload={prescription:{
+    id:parent.id,rx_number:parent.rxNumber,barcode:parent.barcode,patient_id:parent.patientId,visit_id:parent.visitId,
+    consultation_id:parent.consultationId||null,patient_name:parent.patientName,patient_dob:parent.patientDOB,patient_phone:parent.patientPhone,
+    doctor_name:parent.doctorName,doctor_license:parent.doctorLicense,doctor_clinic:parent.doctorClinic,medication_id:parent.medicationId||null,
+    medication_name:parent.medicationName,dosage_instructions:parent.dosageInstructions||'',quantity_prescribed:parent.quantityPrescribed||items.reduce((s,i)=>s+i.quantityPrescribed,0),
+    date_issued:parent.dateIssued,expiry_date:parent.expiryDate,status:'Active',insurance_provider:parent.insuranceProvider||null,insurance_co_pay_rate:parent.insuranceCoPayRate||0
+  },items:items.map(i=>({id:i.id,medication_id:i.medicationId,medication_name:i.medicationName,dosage:i.dosageInstructions||'',frequency:'',duration:'',quantity:i.quantityPrescribed,instructions:i.dosageInstructions||''}))};
+  const{data,error}=await c.rpc('create_clinical_prescription',{p_payload:payload});
+  if(error||!data?.ok)return{ok:false,error:error?.message||'Unable to issue prescription.'};
+  return{ok:true};
+}
+
+export async function upsertPrescriptionToSupabase(x:Prescription){const c=getSupabase();if(!c)return false;const{error}=await c.from('prescriptions').upsert({id:x.id,rx_number:x.rxNumber,barcode:x.barcode,patient_id:x.patientId||null,visit_id:x.visitId||null,consultation_id:x.consultationId||null,patient_name:x.patientName,patient_dob:x.patientDOB,patient_phone:x.patientPhone,doctor_name:x.doctorName,doctor_license:x.doctorLicense,doctor_clinic:x.doctorClinic,medication_id:x.medicationId||null,medication_name:x.medicationName,dosage_instructions:x.dosageInstructions||'',quantity_prescribed:x.quantityPrescribed||0,quantity_dispensed_so_far:x.quantityDispensedSoFar||0,refills_allowed:x.refillsAllowed||0,refills_remaining:x.refillsRemaining||0,date_issued:x.dateIssued,expiry_date:x.expiryDate,status:x.status,insurance_provider:x.insuranceProvider||null,insurance_co_pay_rate:x.insuranceCoPayRate||0});return!error;}
 
 function rowToSale(row:any):SaleTransaction{return{id:row.id,receiptNumber:row.receipt_number,timestamp:row.timestamp,cashierName:row.cashier_name,cashierRole:row.cashier_role as UserRole,items:Array.isArray(row.items)?row.items:[],subtotal:Number(row.subtotal||0),discount:Number(row.discount||0),total:Number(row.total||0),paymentMethod:row.payment_method,amountTendered:row.amount_tendered==null?undefined:Number(row.amount_tendered),changeDue:row.change_due==null?undefined:Number(row.change_due),cashAmount:row.cash_amount==null?undefined:Number(row.cash_amount),mpesaAmount:row.mpesa_amount==null?undefined:Number(row.mpesa_amount),mpesaReference:row.mpesa_reference||undefined,mpesaPhone:row.mpesa_phone||undefined,patientName:row.patient_name||undefined,cardAuthCode:row.card_auth_code||undefined,insuranceProvider:row.insurance_provider||undefined,insurancePolicyNumber:row.insurance_policy_number||undefined,insuranceAuthCode:row.insurance_auth_code||undefined,isOffline:Boolean(row.is_offline),synced:Boolean(row.synced),syncTimestamp:row.sync_timestamp||undefined};}
 export async function pullSaleTransactionsFromSupabase():Promise<SaleTransaction[]|null>{const c=getSupabase();if(!c)return null;const{data,error}=await c.from('sale_transactions').select('*').order('timestamp',{ascending:false});if(error){console.error('Failed to load sales from Supabase',error.message);return null;}return(data||[]).map(rowToSale);}

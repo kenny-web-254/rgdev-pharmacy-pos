@@ -54,7 +54,7 @@ export type PrescriptionStatus = 'Draft' | 'Issued' | 'Partially Dispensed' | 'D
 
 export interface PrescriptionItem { id: string; medicationId: string; medicationName: string; genericName?: string; dosageInstructions: string; quantityPrescribed: number; quantityDispensedSoFar: number; refillsAllowed: number; refillsRemaining: number; }
 export interface Prescription {
-  id: string; rxNumber: string; barcode: string; patientId?: string; patientName: string; patientDOB: string; patientPhone: string;
+  id: string; rxNumber: string; barcode: string; patientId?: string; visitId?: string; consultationId?: string; patientName: string; patientDOB: string; patientPhone: string;
   doctorName: string; doctorLicense: string; doctorClinic: string; medicationId?: string; medicationName: string; dosageInstructions?: string;
   quantityPrescribed?: number; quantityDispensedSoFar?: number; refillsAllowed?: number; refillsRemaining?: number; items?: PrescriptionItem[];
   dateIssued: string; expiryDate: string; status: PrescriptionStatus; insuranceProvider?: string; insuranceCoPayRate?: number; notes?: string;

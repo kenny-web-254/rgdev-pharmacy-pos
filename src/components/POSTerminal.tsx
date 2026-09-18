@@ -552,7 +552,6 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           expiryDate: it.medication.expiryDate || 'N/A',
         })),
         subtotal,
-        tax: 0,
         discount: cartDiscount,
         total,
         paymentMethod: 'Cash',
@@ -687,7 +686,6 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           expiryDate: it.medication.expiryDate || 'N/A',
         })),
         subtotal,
-        tax,
         discount: cartDiscount,
         total,
         paymentMethod,
@@ -1380,8 +1378,6 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
               <span className="font-semibold text-slate-800">{formatKSh(subtotal)}</span>
             </div>
             <div className="flex justify-between">
-              <span>VAT ({Math.round((receiptSettings.taxRate || 0.16) * 100)}%):</span>
-              <span className="font-semibold text-slate-800">{formatKSh(tax)}</span>
             </div>
             {cartDiscount > 0 && (
               <div className="flex justify-between text-emerald-700 font-medium">

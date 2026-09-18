@@ -81,12 +81,12 @@ export interface SaleTransaction {
   id: string; receiptNumber: string; timestamp: string; cashierName: string; cashierRole: UserRole;
   items: { medicationId: string; name: string; genericName: string; dosage: string; isPrescription: boolean; rxNumber?: string; patientName?: string;
     quantity: number; unitPrice: number; totalPrice: number; batchNumber?: string; expiryDate?: string; saleUnit?: string; saleAsPack?: boolean; packSize?: number; }[];
-  subtotal: number; tax: number; discount: number; total: number; paymentMethod: PaymentMethod; amountTendered?: number; changeDue?: number;
+  subtotal: number; discount: number; total: number; paymentMethod: PaymentMethod; amountTendered?: number; changeDue?: number;
   cashAmount?: number; mpesaAmount?: number; mpesaReference?: string; mpesaPhone?: string; patientName?: string; cardAuthCode?: string;
   insuranceProvider?: string; insurancePolicyNumber?: string; insuranceAuthCode?: string; isOffline: boolean; synced: boolean; syncTimestamp?: string;
 }
 
-export interface ReceiptSettings { pharmacyName: string; tagline: string; logoUrl?: string; showLogo?: boolean; logoHeight?: number; addressLine1: string; addressLine2: string; phone: string; email: string; licenseNumber: string; taxId: string; taxRate: number; paperWidth: '80mm' | '58mm'; headerMessage: string; footerMessage: string; returnPolicy: string; emergencyPhone: string; showGenericName: boolean; showBatchAndExpiry: boolean; showPrescriptionDetails: boolean; showPharmacistName: boolean; showBarcode: boolean; showTaxBreakdown: boolean; currencySymbol: string; enableReceiptPrinting?: boolean; autoPrintReceipt?: boolean; showReceiptDialog?: boolean; }
+export interface ReceiptSettings { pharmacyName: string; tagline: string; logoUrl?: string; showLogo?: boolean; logoHeight?: number; addressLine1: string; addressLine2: string; phone: string; email: string; licenseNumber: string; taxId: string; paperWidth: '80mm' | '58mm'; headerMessage: string; footerMessage: string; returnPolicy: string; emergencyPhone: string; showGenericName: boolean; showBatchAndExpiry: boolean; showPrescriptionDetails: boolean; showPharmacistName: boolean; showBarcode: boolean; currencySymbol: string; enableReceiptPrinting?: boolean; autoPrintReceipt?: boolean; showReceiptDialog?: boolean; }
 export interface InventoryAlert { id: string; medicationId: string; medicationName: string; type: 'LOW_STOCK' | 'OUT_OF_STOCK' | 'EXPIRING_SOON' | 'EXPIRED'; currentStock: number; minStockLevel: number; expiryDate?: string; message: string; }
 export type ExpiryFilterPreset = 'all' | 'expired' | 'expiring_30' | 'expiring_90' | 'expiring_180' | 'expiring_365' | 'custom';
 export interface InventoryFilters { searchTerm: string; category: string; supplier: string; stockStatus: 'all' | 'low' | 'rx' | 'otc' | 'expiring'; expiryPreset: ExpiryFilterPreset; expiryStartDate: string; expiryEndDate: string; }

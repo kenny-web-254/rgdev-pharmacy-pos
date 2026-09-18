@@ -15,7 +15,7 @@ import {
   User as UserIcon,
 } from 'lucide-react';
 import { User } from '../types';
-import { storageService } from '../services/storage';
+import { supabaseConfig, getSupabase, updateManagedUser, resetManagedUserPassword } from '../services/supabase';
 
 interface UserProfileViewProps {
   currentUser: User;
@@ -48,20 +48,20 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
   const normalizedRole = currentUser?.role || 'cashier';
 
   // Handle Save Personal Info
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     setProfileMessage(null);
 
-    // Call storageService.updateUser which explicitly enforces role & permission integrity!
-    const res = storageService.updateUser(currentUser, currentUser.id, {
-      name,
-      email,
-      phone,
-      licenseNumber,
-      // Strictly pass no role or status modifications from here
-    });
+    if (!supabaseConfig.isConfigured()) {
+      onShowToast('Supabase is not configured.', 'warning');
+      return;
+    }
 
-    if (!res.success || !res.user) {
+    // All account/profile writes go through the protected Supabase Auth
+    // administrator-provisioning Edge Function. No local user records are authoritative.
+    const res = await updateManagedUser(currentUser.id, { name, email, phone, licenseNumber });
+
+    if (!res.ok || !res.user) {
       onShowToast(res.error || 'Failed to save profile changes.', 'warning');
       return;
     }
@@ -73,19 +73,13 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
   };
 
   // Handle Password Change
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError(null);
     setPasswordSuccess(null);
 
-    // Verify current password if user has one
-    if (currentUser.password && currentPassword !== currentUser.password) {
-      setPasswordError('Current password entered is incorrect.');
-      return;
-    }
-
-    if (newPassword.length < 4) {
-      setPasswordError('New password must be at least 4 characters long.');
+    if (newPassword.length < 8) {
+      setPasswordError('New password must be at least 8 characters long.');
       return;
     }
 
@@ -94,8 +88,15 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
       return;
     }
 
-    const res = storageService.resetUserPassword(currentUser, currentUser.id, newPassword);
-    if (!res.success) {
+    if (!supabaseConfig.isConfigured()) {
+      setPasswordError('Supabase is not configured.');
+      return;
+    }
+
+    // Password changes are performed by the protected server-side
+    // administrator provisioning function; the browser never handles hashes.
+    const res = await resetManagedUserPassword(currentUser.id, newPassword);
+    if (!res.ok) {
       setPasswordError(res.error || 'Failed to update password.');
       return;
     }
@@ -293,7 +294,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
                 required
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Min 4 characters"
+                placeholder="Min 8 characters"
                 className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-600 outline-none font-mono"
               />
             </div>

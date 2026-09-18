@@ -36,10 +36,11 @@ import {
   User,
 } from '../types';
 import {
+  createClinicalPrescriptionToSupabase,
   insertConsultationToSupabase,
+  registerPatientToSupabase,
+  startVisitForPatient,
   upsertClinicalTestToSupabase,
-  upsertPatientToSupabase,
-  upsertPrescriptionToSupabase,
 } from '../services/supabase';
 
 interface ClinicalWorkflowViewProps {
@@ -158,7 +159,7 @@ export const ClinicalWorkflowView: React.FC<ClinicalWorkflowViewProps> = ({
       .filter((a) => a.length > 0);
 
     const newPatient: Patient = {
-      id: `pat-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: `pat-${crypto.randomUUID ? crypto.randomUUID() : `pat-${Date.now()}`}`,
       fullName: patientFullName.trim(),
       dob: patientDob,
       gender: patientGender,
@@ -171,11 +172,15 @@ export const ClinicalWorkflowView: React.FC<ClinicalWorkflowViewProps> = ({
       createdAt: new Date().toISOString(),
     };
 
-    const success = await upsertPatientToSupabase(newPatient);
-    if (success) {
-      onShowToast(`Patient ${newPatient.fullName} registered successfully.`, 'success');
+    const result = await registerPatientToSupabase(newPatient);
+    if (result.ok) {
+      onShowToast(
+        result.existing
+          ? `Existing patient record selected: ${result.patient?.fullName || newPatient.fullName}.`
+          : `Patient ${result.patient?.fullName || newPatient.fullName} registered successfully.`,
+        'success'
+      );
       setIsNewPatientModalOpen(false);
-      // Reset form
       setPatientFullName('');
       setPatientDob('');
       setPatientPhone('');
@@ -186,7 +191,7 @@ export const ClinicalWorkflowView: React.FC<ClinicalWorkflowViewProps> = ({
       setPatientPolicyNumber('');
       onRefreshClinicalData();
     } else {
-      onShowToast('Failed to save patient to Supabase.', 'warning');
+      onShowToast(result.error || 'Failed to save patient to Supabase.', 'warning');
     }
   };
 
@@ -225,10 +230,18 @@ export const ClinicalWorkflowView: React.FC<ClinicalWorkflowViewProps> = ({
     const patient = patients.find((p) => p.id === selectedPatientId);
     if (!patient) return;
 
-    const consultationId = `cons-${Date.now()}`;
+    // Every consultation must belong to an active patient visit.
+    const visitResult = await startVisitForPatient(patient.id);
+    if (!visitResult.ok || !visitResult.visit) {
+      onShowToast(visitResult.error || 'Unable to start the patient visit.', 'warning');
+      return;
+    }
+
+    const consultationId = `cons-${crypto.randomUUID ? crypto.randomUUID() : `cons-${Date.now()}`}`;
     const newConsultation: Consultation = {
       id: consultationId,
       patientId: patient.id,
+      visitId: visitResult.visit.id,
       patientName: patient.fullName,
       clinicianId: currentUser.id,
       clinicianName: currentUser.name,
@@ -246,23 +259,44 @@ export const ClinicalWorkflowView: React.FC<ClinicalWorkflowViewProps> = ({
       createdAt: new Date().toISOString(),
     };
 
-    await insertConsultationToSupabase(newConsultation);
+    const consultationSaved = await insertConsultationToSupabase(newConsultation);
+    if (!consultationSaved) {
+      onShowToast('Consultation could not be saved. No prescription was issued.', 'warning');
+      return;
+    }
 
-    // If prescription items were attached, generate official Prescription records
+    // One prescription header can contain multiple medication lines.
     if (rxItems.length > 0) {
-      for (const item of rxItems) {
-        const rxNumber = `RX-${Math.floor(100000 + Math.random() * 900000)}`;
-        const officialRx: Prescription = {
-          id: `rx-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          rxNumber,
-          barcode: rxNumber,
-          patientId: patient.id,
-          patientName: patient.fullName,
-          patientDOB: patient.dob,
-          patientPhone: patient.phone,
-          doctorName: currentUser.name,
-          doctorLicense: currentUser.licenseNumber || 'REG-CLINICIAN',
-          doctorClinic: 'Outpatient Clinic & Dispensary',
+      const totalQuantity = rxItems.reduce((sum, item) => sum + item.quantity, 0);
+      const firstItem = rxItems[0];
+      const officialRx: Prescription = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `rx-${Date.now()}`,
+        rxNumber: 'PENDING',
+        barcode: 'PENDING',
+        patientId: patient.id,
+        visitId: visitResult.visit.id,
+        consultationId,
+        patientName: patient.fullName,
+        patientDOB: patient.dob,
+        patientPhone: patient.phone,
+        doctorName: currentUser.name,
+        doctorLicense: currentUser.licenseNumber || '',
+        doctorClinic: 'Outpatient Clinic & Dispensary',
+        medicationId: firstItem.medicationId,
+        medicationName: firstItem.medicationName,
+        dosageInstructions: firstItem.dosageInstructions,
+        quantityPrescribed: totalQuantity,
+        quantityDispensedSoFar: 0,
+        refillsAllowed: 0,
+        refillsRemaining: 0,
+        dateIssued: new Date().toISOString().split('T')[0],
+        expiryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        status: 'Active',
+        insuranceProvider: patient.insuranceProvider,
+        insuranceCoPayRate: 0,
+        notes: `Consultation diagnosis: ${diagnosis}`,
+        items: rxItems.map((item) => ({
+          id: crypto.randomUUID ? crypto.randomUUID() : `rxi-${Date.now()}-${Math.random()}`,
           medicationId: item.medicationId,
           medicationName: item.medicationName,
           dosageInstructions: item.dosageInstructions,
@@ -270,18 +304,19 @@ export const ClinicalWorkflowView: React.FC<ClinicalWorkflowViewProps> = ({
           quantityDispensedSoFar: 0,
           refillsAllowed: 0,
           refillsRemaining: 0,
-          dateIssued: new Date().toISOString().split('T')[0],
-          expiryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-          status: 'Issued',
-          insuranceProvider: patient.insuranceProvider,
-          insuranceCoPayRate: patient.insuranceProvider ? 0.2 : 0,
-          notes: `Consultation diagnosis: ${diagnosis}`,
-        };
-        await upsertPrescriptionToSupabase(officialRx);
+        })),
+      };
+      const rxResult = await createClinicalPrescriptionToSupabase(officialRx, officialRx.items || []);
+      if (!rxResult.ok) {
+        onShowToast(rxResult.error || 'Prescription could not be issued.', 'warning');
+        return;
       }
     }
 
-    onShowToast(`Consultation recorded. ${rxItems.length} prescription(s) issued to pharmacy dispensary.`, 'success');
+    onShowToast(
+      `Consultation recorded for ${patient.fullName}. ${rxItems.length ? 'Prescription sent to pharmacy.' : 'No prescription issued.'}`,
+      'success'
+    );
     setIsConsultationModalOpen(false);
     // Reset form
     setSelectedPatientId('');

@@ -1081,6 +1081,8 @@ function transactionToRow(t: SaleTransaction) {
     mpesa_reference: t.mpesaReference ?? null,
     mpesa_phone: t.mpesaPhone ?? null,
     patient_name: t.patientName ?? null,
+    prescription_id: t.prescriptionId ?? null,
+    patient_id: t.patientId ?? null,
     card_auth_code: t.cardAuthCode ?? null,
     insurance_provider: t.insuranceProvider ?? null,
     insurance_policy_number: t.insurancePolicyNumber ?? null,

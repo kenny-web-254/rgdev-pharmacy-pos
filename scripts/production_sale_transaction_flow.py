@@ -1,6 +1,12 @@
 from pathlib import Path
 import re
 
+# The source files are now the canonical implementation. Keep this legacy
+# build transform idempotent so Vercel builds do not fail after source fixes.
+if "const saved = await onCompleteSale(transaction);" in Path('src/components/POSTerminal.tsx').read_text() and "client.rpc('complete_sale'" in Path('src/services/storage.ts').read_text():
+    print('Authoritative sale transaction flow already present; source left unchanged.')
+    raise SystemExit(0)
+
 
 def replace_required(text, pattern, replacement, label, flags=re.S):
     new, count = re.subn(pattern, replacement, text, count=1, flags=flags)

@@ -24,10 +24,13 @@ replacement = '''  async pushTransactionToCloud(t: SaleTransaction): Promise<boo
   },
 };'''
 new, count = re.subn(pattern, replacement, s, count=1)
-if count != 1:
+if count == 1:
+    p.write_text(new)
+    print('Atomic sale RPC integration applied.')
+elif "client.rpc('complete_sale'" in s:
+    print('Atomic sale RPC integration already present; source left unchanged.')
+else:
     raise SystemExit('Could not locate pushTransactionToCloud')
-p.write_text(new)
-print('Atomic sale RPC integration applied.')
 
 # Apply the second-stage transaction-flow hardening in the same build step.
 transaction_flow = Path('scripts/production_sale_transaction_flow.py')

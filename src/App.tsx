@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from 'react';
 import { Navbar } from './components/Navbar';
 import { POSTerminal } from './components/POSTerminal';
+import { ClinicalWorkflowView } from './components/ClinicalWorkflowView';
 import { PrescriptionsManager } from './components/PrescriptionsManager';
 import { TestsManager } from './components/TestsManager';
 import { InventoryManager } from './components/InventoryManager';
@@ -21,7 +22,7 @@ import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
-import { supabaseConfig, checkBootstrapAvailable, signOutSupabase } from './services/supabase';
+import { getAuthenticatedProfile, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, supabaseConfig, checkBootstrapAvailable, signOutSupabase } from './services/supabase';
 import {
   AppNavTab,
   AuditLog,
@@ -34,6 +35,10 @@ import {
   SaleTransaction,
   User,
   UserRole,
+  Patient,
+  Visit,
+  Consultation,
+  ClinicalTest,
 } from './types';
 import { playScanSuccessBeep } from './utils/audio';
 import { formatKSh } from './utils/currency';
@@ -52,14 +57,15 @@ function isTabAllowedForRole(tab: AppNavTab, role: UserRole): boolean {
   const adminOnlyTabs: AppNavTab[] = ['users', 'reports', 'settings', 'audit'];
   if (adminOnlyTabs.includes(tab)) return false;
   if (tab === 'pos') return role === 'cashier';
-  if (tab === 'tests') return role === 'clinician';
+  if (tab === 'tests') return role === 'clinician' || role === 'admin';
+  if (tab === 'clinical') return role === 'clinician' || role === 'admin';
   return true; // prescriptions, inventory (view), profile — visible to all roles
 }
 
 export default function App() {
   // Navigation & Role State
   const [activeTab, setActiveTab] = useState<AppNavTab>('pos');
-  const [currentUser, setCurrentUser] = useState<User | null>(() => storageService.getActiveUser());
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isBootstrapAvailable, setIsBootstrapAvailable] = useState(false);
   const [users, setUsers] = useState<User[]>(() => storageService.getUsers());
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => storageService.getAuditLogs());
@@ -71,6 +77,14 @@ export default function App() {
   const [transactions, setTransactions] = useState<SaleTransaction[]>(() => storageService.getTransactions());
   const [offlineQueue, setOfflineQueue] = useState<SaleTransaction[]>(() => storageService.getOfflineQueue());
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(() => storageService.getReceiptSettings());
+
+  // Clinical records are authoritative Supabase data. They are intentionally
+  // kept in React memory rather than persisted to localStorage so PHI does not
+  // become a second client-side database.
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [visits, setVisits] = useState<Visit[]>([]);
+  const [consultations, setConsultations] = useState<Consultation[]>([]);
+  const [clinicalTests, setClinicalTests] = useState<ClinicalTest[]>([]);
 
   // POS Multi-Customer Order Tabs with localStorage persistence & inventory reconciliation
   const [posTabs, setPosTabs] = useState<POSTab[]>(() => {
@@ -244,6 +258,26 @@ export default function App() {
     showToast('Signed out of session.', 'info');
   };
 
+  // Restore the real Supabase Auth session on every browser/device.
+  // localStorage is never treated as an authentication authority.
+  useEffect(() => {
+    if (!supabaseConfig.isConfigured()) {
+      setCurrentUser(null);
+      return;
+    }
+    let cancelled = false;
+    void getAuthenticatedProfile().then((user) => {
+      if (!cancelled) setCurrentUser(user);
+    });
+    const unsubscribe = onSupabaseAuthStateChange((user) => {
+      if (!cancelled) setCurrentUser(user);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
   // First-run setup: while logged out, check whether any administrator
   // account exists yet so LoginView can offer the bootstrap "create
   // administrator" form instead of a sign-in form nobody could pass.
@@ -278,6 +312,33 @@ export default function App() {
       }
     },
   });
+
+  // Hydrate the clinic workspace from the shared Supabase source of truth.
+  const refreshClinicalData = async () => {
+    if (!supabaseConfig.isConfigured()) return;
+    const [cloudPatients, cloudVisits, cloudConsultations, cloudClinicalTests] = await Promise.all([
+      pullPatientsFromSupabase(),
+      pullVisitsFromSupabase(),
+      pullConsultationsFromSupabase(),
+      pullClinicalTestsFromSupabase(),
+    ]);
+    if (cloudPatients) setPatients(cloudPatients);
+    if (cloudVisits) setVisits(cloudVisits);
+    if (cloudConsultations) setConsultations(cloudConsultations);
+    if (cloudClinicalTests) setClinicalTests(cloudClinicalTests);
+  };
+
+  useEffect(() => {
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'clinician')) {
+      setPatients([]);
+      setVisits([]);
+      setConsultations([]);
+      setClinicalTests([]);
+      return;
+    }
+    void refreshClinicalData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id, currentUser?.role]);
 
   // Cloud hydration: when Supabase is configured, pull the latest medications,
   // prescriptions & tests from the cloud on login so this device starts from
@@ -332,11 +393,14 @@ export default function App() {
         storageService.saveTests(cloudTests);
       }
     },
+    onPatientsChanged: refreshClinicalData,
+    onConsultationsChanged: refreshClinicalData,
+    onClinicalTestsChanged: refreshClinicalData,
   });
 
   // Default landing tab per role (used on login & when redirected off a restricted tab)
   const defaultTabForRole = (role: UserRole): AppNavTab => {
-    if (role === 'clinician') return 'prescriptions';
+    if (role === 'clinician') return 'clinical';
     return 'pos';
   };
 
@@ -942,6 +1006,7 @@ export default function App() {
 
   // Authentication & Session
   const handleLogin = (user: User) => {
+    storageService.saveActiveUser(user);
     setCurrentUser(user);
     if (!isTabAllowedForRole(activeTab, user.role)) {
       setActiveTab(defaultTabForRole(user.role));
@@ -1069,6 +1134,19 @@ export default function App() {
               onToggleParkTab={handleToggleParkPOSTab}
               activePatientName={activePOSTab.patientName || ''}
               onUpdatePatientName={handleUpdateActivePatientName}
+            />
+          )}
+
+          {activeTab === 'clinical' && (currentUser.role === 'admin' || currentUser.role === 'clinician') && (
+            <ClinicalWorkflowView
+              currentUser={currentUser}
+              patients={patients}
+              consultations={consultations}
+              clinicalTests={clinicalTests}
+              prescriptions={prescriptions}
+              medications={medications}
+              onRefreshClinicalData={() => void refreshClinicalData()}
+              onShowToast={showToast}
             />
           )}
 

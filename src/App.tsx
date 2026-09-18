@@ -787,73 +787,69 @@ export default function App() {
     showToast(`Barcode "${code}" was not recognized in prescriptions or drug catalog.`, 'warning');
   };
 
-  // Sale Finalization with strict pharmaceutical stock and batch validation
-  const handleCompleteSale = (transaction: SaleTransaction) => {
-    // 0. Pharmaceutical Compliance Validation: Ensure stock levels NEVER fall below zero during any transaction
+  // Sale Finalization: Supabase is the source of truth for online sales.
+  // No local stock or transaction state changes until the authoritative save succeeds.
+  const handleCompleteSale = async (transaction: SaleTransaction): Promise<boolean> => {
+    if (!currentUser) {
+      showToast('Sale rejected: no authenticated user session.', 'error');
+      return false;
+    }
+
     for (const soldItem of transaction.items) {
       const currentMed = medications.find((m) => m.id === soldItem.medicationId);
       if (!currentMed) {
-        showToast(
-          `Pharmaceutical Compliance Error: Drug "${soldItem.name}" does not exist in inventory catalog. Sale aborted.`,
-          'error'
-        );
-        return;
+        showToast(`Sale rejected: ${soldItem.name} is not in the current inventory.`, 'error');
+        return false;
       }
       if (currentMed.stock < soldItem.quantity) {
         showToast(
-          `Pharmaceutical Compliance Error: Stock for "${currentMed.name}" cannot fall below zero! Shelf stock is ${currentMed.stock}, but ${soldItem.quantity} was requested. Sale rejected.`,
+          `Sale rejected: ${currentMed.name} has only ${currentMed.stock} units available; ${soldItem.quantity} requested.`,
           'error'
         );
-        return;
+        return false;
+      }
+      if (!soldItem.batchNumber || !soldItem.expiryDate) {
+        showToast(`Sale rejected: batch and expiry information are required for ${soldItem.name}.`, 'error');
+        return false;
       }
     }
 
-    // 1. Deduct stock from inventory strictly enforcing floor of 0
+    if (!transaction.isOffline) {
+      const saved = await storageService.pushTransactionToCloud(transaction);
+      if (!saved) {
+        showToast(
+          `Sale ${transaction.receiptNumber} was NOT saved. No local stock deduction was applied. Retry the sale.`,
+          'error'
+        );
+        return false;
+      }
+    }
+
     const updatedMeds = medications.map((med) => {
       const soldItem = transaction.items.find((item) => item.medicationId === med.id);
-      if (soldItem) {
-        return {
-          ...med,
-          stock: Math.max(0, med.stock - soldItem.quantity),
-        };
-      }
-      return med;
+      return soldItem ? { ...med, stock: Math.max(0, med.stock - soldItem.quantity) } : med;
     });
     setMedications(updatedMeds);
     storageService.saveMedications(updatedMeds);
-    updatedMeds
-      .filter((med) => transaction.items.some((item) => item.medicationId === med.id))
-      .forEach((med) => storageService.pushMedicationToCloud(med));
 
-    // 2. Update prescription refill status if applicable
     const updatedRxs = prescriptions.map((rx) => {
       const soldRx = transaction.items.find((item) => item.rxNumber === rx.rxNumber);
-      if (soldRx) {
-        const newRemaining = Math.max(0, rx.refillsRemaining - 1);
-        return {
-          ...rx,
-          refillsRemaining: newRemaining,
-          quantityDispensedSoFar: rx.quantityDispensedSoFar + soldRx.quantity,
-          status: newRemaining === 0 ? ('Dispensed' as const) : rx.status,
-        };
-      }
-      return rx;
+      if (!soldRx) return rx;
+      const newRemaining = Math.max(0, rx.refillsRemaining - 1);
+      return {
+        ...rx,
+        refillsRemaining: newRemaining,
+        quantityDispensedSoFar: rx.quantityDispensedSoFar + soldRx.quantity,
+        status: newRemaining === 0 ? ('Dispensed' as const) : rx.status,
+      };
     });
     setPrescriptions(updatedRxs);
     storageService.savePrescriptions(updatedRxs);
-    updatedRxs
-      .filter((rx) => transaction.items.some((item) => item.rxNumber === rx.rxNumber))
-      .forEach((rx) => storageService.pushPrescriptionToCloud(rx));
 
-    // 3. Persist transaction
     const newTxList = [transaction, ...transactions];
     setTransactions(newTxList);
     storageService.saveTransactions(newTxList);
-    if (!transaction.isOffline) {
-      storageService.pushTransactionToCloud(transaction);
-    }
 
-    // 4. Log Audit Trail with strict Batch association
     if (currentUser) {
       const batchDetails = transaction.items
         .map((it) => `${it.name} (Qty: ${it.quantity}, Batch: ${it.batchNumber || 'Unspecified'})`)
@@ -863,20 +859,26 @@ export default function App() {
         userName: currentUser.name,
         userRole: currentUser.role,
         action: 'SALE_COMPLETED',
-        details: `Sale ${transaction.receiptNumber} recorded (${transaction.items.length} items, Total: ${formatKSh(
-          transaction.total
-        )}, Method: ${transaction.paymentMethod}, Tab: "${activePOSTab.name}") | Batches Dispensed: [${batchDetails}]`,
+        details: `Sale ${transaction.receiptNumber} recorded (${transaction.items.length} items, Total: ${formatKSh(transaction.total)}, Method: ${transaction.paymentMethod}) | Batches Dispensed: [${batchDetails}]`,
         category: 'SALES',
       });
       setAuditLogs(storageService.getAuditLogs());
     }
 
-    // 5. Manage Tab Post-Sale
+    if (transaction.isOffline) {
+      storageService.addToOfflineQueue(transaction);
+      setOfflineQueue(storageService.getOfflineQueue());
+      showToast(`Sale queued offline (${transaction.receiptNumber}). It will sync when online.`, 'info');
+    } else {
+      showToast(`Sale completed successfully! Receipt ${transaction.receiptNumber}`, 'success');
+    }
+
+    setReceiptModalTx(transaction);
+
     if (posTabs.length > 1) {
       const remainingTabs = posTabs.filter((t) => t.id !== activePOSTab.id);
       setPosTabs(remainingTabs);
-      setActivePOSTabId(remainingTabs[0].id);
-      showToast(`Sale completed on tab "${activePOSTab.name}". Switched to "${remainingTabs[0].name}".`, 'success');
+      setActivePOSTabId(remainingTabs[0]?.id || 'tab-1');
     } else {
       const freshTab: POSTab = {
         id: `tab-${Date.now()}`,
@@ -889,18 +891,9 @@ export default function App() {
       };
       setPosTabs([freshTab]);
       setActivePOSTabId(freshTab.id);
-      showToast(`Sale completed successfully! Receipt ${transaction.receiptNumber}`, 'success');
     }
 
-    // 6. Handle Offline Queueing if offline
-    if (transaction.isOffline) {
-      storageService.addToOfflineQueue(transaction);
-      setOfflineQueue(storageService.getOfflineQueue());
-      showToast(`Sale recorded in offline queue (${transaction.receiptNumber}). It will auto-sync when online.`, 'info');
-    }
-
-    // 7. Open thermal receipt modal
-    setReceiptModalTx(transaction);
+    return true;
   };
 
   // System Data Reset Handler (Admin Only) - wipes stock, sales & activity while strictly preserving shop details & accounts

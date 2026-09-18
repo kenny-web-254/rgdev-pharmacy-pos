@@ -12,12 +12,13 @@ replacement = '''  async pushTransactionToCloud(t: SaleTransaction): Promise<boo
         p_transaction: transactionToRow(t),
       });
       if (error || !data?.ok) {
-        console.error('Atomic sale synchronization failed', error?.message || data);
+        const detail = error?.message || (data ? JSON.stringify(data) : 'No response from complete_sale RPC');
+        console.error('Atomic sale synchronization failed:', detail);
         return false;
       }
       return true;
     } catch (e) {
-      console.error('Atomic sale synchronization failed', e);
+      console.error('Atomic sale synchronization failed:', e instanceof Error ? e.message : String(e));
       return false;
     }
   },

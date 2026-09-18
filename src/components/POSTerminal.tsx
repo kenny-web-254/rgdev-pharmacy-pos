@@ -559,6 +559,8 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
         amountTendered: roundedTotal,
         changeDue: 0,
         cashAmount: roundedTotal,
+        prescriptionId: cart.find((i) => i.prescriptionId)?.prescriptionId,
+        patientId: (() => { const pid = cart.find((i) => i.prescriptionId)?.prescriptionId; return pid ? prescriptions.find((r) => r.id === pid)?.patientId : undefined; })(),
         patientName: patientNameInput || undefined,
         isOffline: !isOnline,
         synced: isOnline,
@@ -722,6 +724,8 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           paymentMethod === 'M-Pesa' || paymentMethod === 'Partial (Cash + M-Pesa)'
             ? mpesaPhone
             : undefined,
+        prescriptionId: cart.find((i) => i.prescriptionId)?.prescriptionId,
+        patientId: (() => { const pid = cart.find((i) => i.prescriptionId)?.prescriptionId; return pid ? prescriptions.find((r) => r.id === pid)?.patientId : undefined; })(),
         patientName: patientNameInput || undefined,
         cardAuthCode:
           paymentMethod === 'Credit/Debit Card'

@@ -22,7 +22,7 @@ import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
-import { getAuthenticatedProfile, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, supabaseConfig, checkBootstrapAvailable, signOutSupabase } from './services/supabase';
+import { getAuthenticatedProfile, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, supabaseConfig, signOutSupabase } from './services/supabase';
 import {
   AppNavTab,
   AuditLog,
@@ -66,7 +66,6 @@ export default function App() {
   // Navigation & Role State
   const [activeTab, setActiveTab] = useState<AppNavTab>('pos');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isBootstrapAvailable, setIsBootstrapAvailable] = useState(false);
   const [users, setUsers] = useState<User[]>(() => storageService.getUsers());
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => storageService.getAuditLogs());
 
@@ -277,24 +276,6 @@ export default function App() {
       unsubscribe();
     };
   }, []);
-
-  // First-run setup: while logged out, check whether any administrator
-  // account exists yet so LoginView can offer the bootstrap "create
-  // administrator" form instead of a sign-in form nobody could pass.
-  useEffect(() => {
-    if (currentUser || !supabaseConfig.isConfigured()) {
-      setIsBootstrapAvailable(false);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      const available = await checkBootstrapAvailable();
-      if (!cancelled) setIsBootstrapAvailable(available);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentUser]);
 
   // Security: auto-logout after a period of inactivity. Runs only while a
   // user is signed in, and resets on any mouse/keyboard/touch/scroll activity.
@@ -1075,7 +1056,6 @@ export default function App() {
         <LoginView
           onLogin={handleLogin}
           pharmacyName={receiptSettings.pharmacyName}
-          isBootstrapAvailable={isBootstrapAvailable}
         />
       </>
     );

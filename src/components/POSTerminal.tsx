@@ -462,7 +462,9 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
   }, 0);
 
   const cartDiscount = (subtotal * discountPercent) / 100;
-  const total = Math.round(Math.max(0, subtotal - cartDiscount) * 100) / 100;
+  const taxableAmount = Math.max(0, subtotal - cartDiscount);
+  const tax = taxableAmount * (receiptSettings.taxRate || 0.16);
+  const total = Math.round((taxableAmount + tax) * 100) / 100;
 
   // Change calculations depending on payment method
   let changeDue = 0;
@@ -543,7 +545,6 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           genericName: it.medication.genericName,
           dosage: it.medication.dosage,
           isPrescription: it.medication.isPrescriptionRequired,
-          prescriptionItemId: it.prescriptionItemId,
           rxNumber: it.rxNumber,
           patientName: it.patientName || patientNameInput,
           quantity: it.quantity,
@@ -553,14 +554,13 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           expiryDate: it.medication.expiryDate || 'N/A',
         })),
         subtotal,
+        tax,
         discount: cartDiscount,
         total,
         paymentMethod: 'Cash',
         amountTendered: roundedTotal,
         changeDue: 0,
         cashAmount: roundedTotal,
-        prescriptionId: cart.find((i) => i.prescriptionId)?.prescriptionId,
-        patientId: (() => { const pid = cart.find((i) => i.prescriptionId)?.prescriptionId; return pid ? prescriptions.find((r) => r.id === pid)?.patientId : undefined; })(),
         patientName: patientNameInput || undefined,
         isOffline: !isOnline,
         synced: isOnline,
@@ -569,7 +569,9 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
 
       const saved = await onCompleteSale(transaction);
       if (!saved) {
-        setCheckoutError('Sale was not saved. No stock was finalized and the cart has been kept for retry.');
+        // The authoritative save failed (or was rejected server-side) - the
+        // cart is kept exactly as-is so the cashier can retry, rather than
+        // clearing it and implying the sale went through.
         return;
       }
       onUpdateCart([]);
@@ -684,7 +686,6 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           genericName: it.medication.genericName,
           dosage: it.medication.dosage,
           isPrescription: it.medication.isPrescriptionRequired,
-          prescriptionItemId: it.prescriptionItemId,
           rxNumber: it.rxNumber,
           patientName: it.patientName || patientNameInput,
           quantity: it.quantity,
@@ -694,6 +695,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           expiryDate: it.medication.expiryDate || 'N/A',
         })),
         subtotal,
+        tax,
         discount: cartDiscount,
         total,
         paymentMethod,
@@ -724,8 +726,6 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           paymentMethod === 'M-Pesa' || paymentMethod === 'Partial (Cash + M-Pesa)'
             ? mpesaPhone
             : undefined,
-        prescriptionId: cart.find((i) => i.prescriptionId)?.prescriptionId,
-        patientId: (() => { const pid = cart.find((i) => i.prescriptionId)?.prescriptionId; return pid ? prescriptions.find((r) => r.id === pid)?.patientId : undefined; })(),
         patientName: patientNameInput || undefined,
         cardAuthCode:
           paymentMethod === 'Credit/Debit Card'
@@ -1392,6 +1392,8 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
               <span className="font-semibold text-slate-800">{formatKSh(subtotal)}</span>
             </div>
             <div className="flex justify-between">
+              <span>VAT ({Math.round((receiptSettings.taxRate || 0.16) * 100)}%):</span>
+              <span className="font-semibold text-slate-800">{formatKSh(tax)}</span>
             </div>
             {cartDiscount > 0 && (
               <div className="flex justify-between text-emerald-700 font-medium">

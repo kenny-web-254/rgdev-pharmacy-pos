@@ -43,7 +43,7 @@ ${settings.tagline}
 ${settings.addressLine1}
 ${settings.addressLine2}
 Tel: ${settings.phone} | ${settings.licenseNumber}
-----------------------------------------
+${settings.taxId ? `${settings.taxId}\n` : ''}----------------------------------------
 Receipt: ${transaction.receiptNumber}
 Date: ${new Date(transaction.timestamp).toLocaleString()}
 Cashier: ${transaction.cashierName}
@@ -60,6 +60,7 @@ ${transaction.items
   .join('\n')}
 ----------------------------------------
 Subtotal: ${formatKSh(transaction.subtotal)}
+VAT (${Math.round((settings.taxRate || 0.16) * 100)}%): ${formatKSh(transaction.tax)}
 ${transaction.discount > 0 ? `Discount: -${formatKSh(transaction.discount)}\n` : ''}TOTAL: ${formatKSh(transaction.total)}
 ${
   isPartial
@@ -181,6 +182,7 @@ ${settings.emergencyPhone}
               <p className="text-[10px] text-slate-600">{settings.addressLine2}</p>
               <p className="text-[10px] text-slate-600">Tel: {settings.phone}</p>
               <p className="text-[9px] text-slate-500">{settings.licenseNumber}</p>
+              {settings.taxId && <p className="text-[9px] text-slate-500 font-bold">{settings.taxId}</p>}
             </div>
 
             {/* Transaction metadata */}
@@ -272,6 +274,12 @@ ${settings.emergencyPhone}
                 <span>SUBTOTAL:</span>
                 <span>{formatKSh(transaction.subtotal)}</span>
               </div>
+              {settings.showTaxBreakdown && (
+                <div className="flex justify-between text-slate-600">
+                  <span>VAT ({Math.round((settings.taxRate || 0.16) * 100)}%):</span>
+                  <span>{formatKSh(transaction.tax)}</span>
+                </div>
+              )}
               {transaction.discount > 0 && (
                 <div className="flex justify-between text-slate-700">
                   <span>DISCOUNT / COPAY:</span>
@@ -371,6 +379,7 @@ ${settings.emergencyPhone}
             <p className="text-[10px] m-0">{settings.addressLine2}</p>
             <p className="text-[10px] m-0">Tel: {settings.phone}</p>
             <p className="text-[9px] m-0">{settings.licenseNumber}</p>
+            {settings.taxId && <p className="text-[9px] m-0 font-bold">{settings.taxId}</p>}
           </div>
 
           <div className="py-2 border-b border-dashed border-black text-[10px]">
@@ -432,6 +441,8 @@ ${settings.emergencyPhone}
               <span>{formatKSh(transaction.subtotal)}</span>
             </div>
             <div className="flex justify-between">
+              <span>VAT ({Math.round((settings.taxRate || 0.16) * 100)}%):</span>
+              <span>{formatKSh(transaction.tax)}</span>
             </div>
             {transaction.discount > 0 && (
               <div className="flex justify-between">

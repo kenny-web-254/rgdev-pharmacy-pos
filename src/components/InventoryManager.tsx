@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Download,
   Edit2,
+  FileSpreadsheet,
   Filter,
   PackagePlus,
   Pill,
@@ -29,6 +30,8 @@ import {
 import { ExpiryFilterPreset, InventoryFilters, Medication, MedicationCategory, UserRole } from '../types';
 import { formatKSh } from '../utils/currency';
 import { storageService } from '../services/storage';
+import { formatQuantityDisplay, getEffectiveUnitPrice } from '../services/unitConversion';
+import { InventoryExcelImport } from './InventoryExcelImport';
 
 interface InventoryManagerProps {
   medications: Medication[];
@@ -151,6 +154,7 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
   const [restockReason, setRestockReason] = useState<string>('Stock intake / Supplier delivery');
   const [restockError, setRestockError] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isExcelImportOpen, setIsExcelImportOpen] = useState(false);
   const [addFormError, setAddFormError] = useState<string | null>(null);
   const [editFormError, setEditFormError] = useState<string | null>(null);
   const [exportSuccessMessage, setExportSuccessMessage] = useState<string | null>(null);
@@ -571,8 +575,14 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
         stockStatus = 'LOW STOCK';
       }
 
-      const totalCost = (med.stock * (med.costPrice || 0)).toFixed(2);
-      const totalRetail = (med.stock * med.price).toFixed(2);
+      // Value at base-unit (per-piece) cost/price, not the pack price -
+      // med.stock is always in base units, while med.costPrice/med.price
+      // are per pack. Multiplying stock directly by the pack price would
+      // overstate value for any product with a pack size > 1.
+      const perUnitCost = getEffectiveUnitPrice({ ...med, price: med.costPrice, unitPrice: med.unitCost }, 'base');
+      const perUnitPrice = getEffectiveUnitPrice(med, 'base');
+      const totalCost = (med.stock * perUnitCost).toFixed(2);
+      const totalRetail = (med.stock * perUnitPrice).toFixed(2);
 
       return [
         escapeCsv(med.id),
@@ -711,6 +721,16 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
               </button>
 
               <button
+                id="import-inventory-excel-btn"
+                type="button"
+                onClick={() => setIsExcelImportOpen(true)}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-xs transition active:scale-95 cursor-pointer"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                Import Stock Spreadsheet
+              </button>
+
+              <button
                 id="add-medication-btn"
                 onClick={() => setIsAddModalOpen(true)}
                 className="flex items-center gap-1.5 px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-semibold shadow-xs transition active:scale-95 cursor-pointer"
@@ -722,6 +742,15 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
           )}
         </div>
       </div>
+
+      {isExcelImportOpen && isAdmin && (
+        <InventoryExcelImport
+          medications={medications}
+          onAddMedication={onAddMedication}
+          onUpdateMedication={onUpdateMedication}
+          onClose={() => setIsExcelImportOpen(false)}
+        />
+      )}
 
       {/* Export Success Notification Banner */}
       {exportSuccessMessage && (
@@ -1214,7 +1243,7 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
                           }`}
                         >
                           {isLow && <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />}
-                          <span>{med.stock} units</span>
+                          <span>{formatQuantityDisplay(med)}</span>
                         </div>
                         <div className="text-[10px] text-slate-400 mt-0.5">
                           Min Alert: {med.minStockLevel}

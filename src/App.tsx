@@ -6,7 +6,6 @@
 import React, { useEffect, useState } from 'react';
 import { Navbar } from './components/Navbar';
 import { POSTerminal } from './components/POSTerminal';
-import { ClinicalWorkflowView } from './components/ClinicalWorkflowView';
 import { PrescriptionsManager } from './components/PrescriptionsManager';
 import { TestsManager } from './components/TestsManager';
 import { InventoryManager } from './components/InventoryManager';
@@ -22,24 +21,35 @@ import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
-import { getAuthenticatedProfile, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, supabaseConfig, signOutSupabase } from './services/supabase';
+import {
+  supabaseConfig,
+  checkBootstrapAvailable,
+  signOutSupabase,
+  onSupabaseAuthStateChange,
+  listManagedUsers,
+  pullSaleTransactionsFromSupabase,
+  pullReceiptSettingsFromSupabase,
+  fetchPatientsFromSupabase,
+  fetchConsultationsFromSupabase,
+  fetchClinicalTestsFromSupabase,
+} from './services/supabase';
 import {
   AppNavTab,
   AuditLog,
   CartItem,
+  ClinicalTest,
+  Consultation,
   MedicalTest,
   Medication,
+  Patient,
   POSTab,
   Prescription,
   ReceiptSettings,
   SaleTransaction,
   User,
   UserRole,
-  Patient,
-  Visit,
-  Consultation,
-  ClinicalTest,
 } from './types';
+import { ClinicalWorkflowView } from './components/ClinicalWorkflowView';
 import { playScanSuccessBeep } from './utils/audio';
 import { formatKSh } from './utils/currency';
 import { CheckCircle2, Info, Lock, ShieldAlert } from 'lucide-react';
@@ -57,15 +67,20 @@ function isTabAllowedForRole(tab: AppNavTab, role: UserRole): boolean {
   const adminOnlyTabs: AppNavTab[] = ['users', 'reports', 'settings', 'audit'];
   if (adminOnlyTabs.includes(tab)) return false;
   if (tab === 'pos') return role === 'cashier';
-  if (tab === 'tests') return role === 'clinician' || role === 'admin';
-  if (tab === 'clinical') return role === 'clinician' || role === 'admin';
+  if (tab === 'tests') return role === 'clinician';
+  if (tab === 'clinical') return role === 'clinician';
   return true; // prescriptions, inventory (view), profile — visible to all roles
 }
 
 export default function App() {
   // Navigation & Role State
   const [activeTab, setActiveTab] = useState<AppNavTab>('pos');
+  // Auth is authoritative from Supabase (getAuthenticatedProfile / the auth
+  // state subscription below) - NOT from local storage.
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [timeoutMessage, setTimeoutMessage] = useState<string | null>(null);
+  const [isBootstrapAvailable, setIsBootstrapAvailable] = useState(false);
   const [users, setUsers] = useState<User[]>(() => storageService.getUsers());
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => storageService.getAuditLogs());
 
@@ -73,17 +88,12 @@ export default function App() {
   const [medications, setMedications] = useState<Medication[]>(() => storageService.getMedications());
   const [prescriptions, setPrescriptions] = useState<Prescription[]>(() => storageService.getPrescriptions());
   const [tests, setTests] = useState<MedicalTest[]>(() => storageService.getTests());
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [consultations, setConsultations] = useState<Consultation[]>([]);
+  const [clinicalTests, setClinicalTests] = useState<ClinicalTest[]>([]);
   const [transactions, setTransactions] = useState<SaleTransaction[]>(() => storageService.getTransactions());
   const [offlineQueue, setOfflineQueue] = useState<SaleTransaction[]>(() => storageService.getOfflineQueue());
   const [receiptSettings, setReceiptSettings] = useState<ReceiptSettings>(() => storageService.getReceiptSettings());
-
-  // Clinical records are authoritative Supabase data. They are intentionally
-  // kept in React memory rather than persisted to localStorage so PHI does not
-  // become a second client-side database.
-  const [patients, setPatients] = useState<Patient[]>([]);
-  const [visits, setVisits] = useState<Visit[]>([]);
-  const [consultations, setConsultations] = useState<Consultation[]>([]);
-  const [clinicalTests, setClinicalTests] = useState<ClinicalTest[]>([]);
 
   // POS Multi-Customer Order Tabs with localStorage persistence & inventory reconciliation
   const [posTabs, setPosTabs] = useState<POSTab[]>(() => {
@@ -245,9 +255,17 @@ export default function App() {
   };
 
   const refreshUsersAndLogs = () => {
-    setUsers(storageService.getUsers());
+    if (supabaseConfig.isConfigured()) {
+      listManagedUsers().then((result) => {
+        if (result.ok) setUsers(result.users);
+      });
+    } else {
+      setUsers([]);
+    }
     setAuditLogs(storageService.getAuditLogs());
-    setCurrentUser(storageService.getActiveUser());
+    // NOTE: currentUser is intentionally NOT re-derived from local storage
+    // here - it's authoritative from the Supabase session-restore effect
+    // below.
   };
 
   const handleLogout = () => {
@@ -257,25 +275,48 @@ export default function App() {
     showToast('Signed out of session.', 'info');
   };
 
-  // Restore the real Supabase Auth session on every browser/device.
-  // localStorage is never treated as an authentication authority.
+  // Session restore: authentication is authoritative from Supabase Auth,
+  // never from local storage. Subscribes once on mount; the first callback
+  // (Supabase's INITIAL_SESSION event) resolves whatever session already
+  // exists (refresh, reopened browser), and later callbacks handle
+  // sign-in/out/token-refresh - including a session invalidated elsewhere.
   useEffect(() => {
+    let cancelled = false;
     if (!supabaseConfig.isConfigured()) {
-      setCurrentUser(null);
+      setSessionLoading(false);
       return;
     }
-    let cancelled = false;
-    void getAuthenticatedProfile().then((user) => {
-      if (!cancelled) setCurrentUser(user);
-    });
     const unsubscribe = onSupabaseAuthStateChange((user) => {
-      if (!cancelled) setCurrentUser(user);
+      if (cancelled) return;
+      setCurrentUser(user);
+      if (user) storageService.saveActiveUser(user);
+      else storageService.logoutActiveUser(null);
+      setSessionLoading(false);
     });
     return () => {
       cancelled = true;
       unsubscribe();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // First-run setup: while logged out, check whether any administrator
+  // account exists yet so LoginView can offer the bootstrap "create
+  // administrator" form instead of a sign-in form nobody could pass.
+  useEffect(() => {
+    if (currentUser || !supabaseConfig.isConfigured()) {
+      setIsBootstrapAvailable(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const available = await checkBootstrapAvailable();
+      if (!cancelled) setIsBootstrapAvailable(available);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
 
   // Security: auto-logout after a period of inactivity. Runs only while a
   // user is signed in, and resets on any mouse/keyboard/touch/scroll activity.
@@ -289,50 +330,28 @@ export default function App() {
         storageService.logoutActiveUser(currentUser);
         setCurrentUser(null);
         void signOutSupabase();
-        showToast('You were signed out automatically after a period of inactivity.', 'info');
+        setTimeoutMessage('You were logged out due to inactivity.');
+        showToast('You were logged out due to inactivity.', 'info');
       }
     },
   });
 
-  // Hydrate the clinic workspace from the shared Supabase source of truth.
-  const refreshClinicalData = async () => {
-    if (!supabaseConfig.isConfigured()) return;
-    const [cloudPatients, cloudVisits, cloudConsultations, cloudClinicalTests] = await Promise.all([
-      pullPatientsFromSupabase(),
-      pullVisitsFromSupabase(),
-      pullConsultationsFromSupabase(),
-      pullClinicalTestsFromSupabase(),
-    ]);
-    if (cloudPatients) setPatients(cloudPatients);
-    if (cloudVisits) setVisits(cloudVisits);
-    if (cloudConsultations) setConsultations(cloudConsultations);
-    if (cloudClinicalTests) setClinicalTests(cloudClinicalTests);
-  };
-
-  useEffect(() => {
-    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'clinician')) {
-      setPatients([]);
-      setVisits([]);
-      setConsultations([]);
-      setClinicalTests([]);
-      return;
-    }
-    void refreshClinicalData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id, currentUser?.role]);
-
   // Cloud hydration: when Supabase is configured, pull the latest medications,
-  // prescriptions & tests from the cloud on login so this device starts from
-  // the shared source of truth rather than stale local data.
+  // prescriptions, tests, sales, receipt settings & staff roster from the
+  // cloud on login so this device starts from the shared source of truth
+  // rather than stale/empty local data.
   useEffect(() => {
     if (!currentUser || !supabaseConfig.isConfigured()) return;
     (async () => {
-      const [cloudMeds, cloudRx, cloudTests] = await Promise.all([
+      const [cloudMeds, cloudRx, cloudTests, cloudSales, cloudSettings, cloudUsersResult] = await Promise.all([
         storageService.pullMedicationsFromCloud(),
         storageService.pullPrescriptionsFromCloud(),
         storageService.pullTestsFromCloud(),
+        pullSaleTransactionsFromSupabase(),
+        pullReceiptSettingsFromSupabase(),
+        listManagedUsers(),
       ]);
-      if (cloudMeds && cloudMeds.length > 0) {
+      if (cloudMeds) {
         setMedications(cloudMeds);
         storageService.saveMedications(cloudMeds);
       }
@@ -344,13 +363,52 @@ export default function App() {
         setTests(cloudTests);
         storageService.saveTests(cloudTests);
       }
+      if (cloudSales) {
+        setTransactions(cloudSales);
+        storageService.saveTransactions(cloudSales);
+      }
+      if (cloudSettings) {
+        setReceiptSettings(cloudSettings);
+        storageService.saveReceiptSettings(cloudSettings);
+      }
+      if (cloudUsersResult.ok) {
+        setUsers(cloudUsersResult.users);
+      }
+      // Clinical/PHI data: only admin and clinician roles can read it
+      // (RLS enforces this server-side regardless), so cashiers never even
+      // attempt the fetch, and it is never cached to local storage.
+      if (currentUser.role === 'admin' || currentUser.role === 'clinician') {
+        const [cloudPatients, cloudConsultations, cloudClinicalTests] = await Promise.all([
+          fetchPatientsFromSupabase(),
+          fetchConsultationsFromSupabase(),
+          fetchClinicalTestsFromSupabase(),
+        ]);
+        if (cloudPatients) setPatients(cloudPatients);
+        if (cloudConsultations) setConsultations(cloudConsultations);
+        if (cloudClinicalTests) setClinicalTests(cloudClinicalTests);
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser?.id]);
 
-  // Realtime sync: live-refresh medications/prescriptions/tests when another
-  // device (a different cashier till, the clinician's tablet, admin laptop)
-  // writes a change to Supabase.
+  const refreshClinicalData = () => {
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'clinician')) return;
+    fetchPatientsFromSupabase().then((r) => r && setPatients(r));
+    fetchConsultationsFromSupabase().then((r) => r && setConsultations(r));
+    fetchClinicalTestsFromSupabase().then((r) => r && setClinicalTests(r));
+    // A consultation can issue real prescriptions, dispensed at the
+    // pharmacy counter - refresh those too so they show up immediately.
+    storageService.pullPrescriptionsFromCloud().then((r) => {
+      if (r) {
+        setPrescriptions(r);
+        storageService.savePrescriptions(r);
+      }
+    });
+  };
+
+  // Realtime sync: live-refresh medications/prescriptions/tests/sales/
+  // receipt settings/staff roster when another device (a different cashier
+  // till, the clinician's tablet, admin laptop) writes a change to Supabase.
   useRealtimeSync({
     enabled: !!currentUser,
     onMedicationsChanged: async () => {
@@ -374,9 +432,24 @@ export default function App() {
         storageService.saveTests(cloudTests);
       }
     },
-    onPatientsChanged: refreshClinicalData,
-    onConsultationsChanged: refreshClinicalData,
-    onClinicalTestsChanged: refreshClinicalData,
+    onSalesChanged: async () => {
+      const cloudSales = await pullSaleTransactionsFromSupabase();
+      if (cloudSales) {
+        setTransactions(cloudSales);
+        storageService.saveTransactions(cloudSales);
+      }
+    },
+    onReceiptSettingsChanged: async () => {
+      const settings = await pullReceiptSettingsFromSupabase();
+      if (settings) {
+        setReceiptSettings(settings);
+        storageService.saveReceiptSettings(settings);
+      }
+    },
+    onUsersChanged: async () => {
+      const result = await listManagedUsers();
+      if (result.ok) setUsers(result.users);
+    },
   });
 
   // Default landing tab per role (used on login & when redirected off a restricted tab)
@@ -723,82 +796,61 @@ export default function App() {
   };
 
   const handleDispensePrescriptionToCart = (rx: Prescription) => {
-    const lines = rx.items && rx.items.length > 0
-      ? rx.items.filter((item) => item.quantityPrescribed - item.quantityDispensedSoFar > 0)
-      : [{
-          id: `legacy-${rx.id}`,
-          medicationId: rx.medicationId || '',
-          medicationName: rx.medicationName,
-          dosageInstructions: rx.dosageInstructions || '',
-          quantityPrescribed: rx.quantityPrescribed,
-          quantityDispensedSoFar: rx.quantityDispensedSoFar || 0,
-          refillsAllowed: rx.refillsAllowed || 0,
-          refillsRemaining: rx.refillsRemaining || 0,
-        }];
-
-    if (lines.length === 0) {
-      showToast(`Prescription ${rx.rxNumber} has no remaining quantities to dispense.`, 'warning');
+    const med = medications.find((m) => m.id === rx.medicationId);
+    if (!med) {
+      alert('Associated medication not found in pharmacy inventory.');
       return;
     }
 
+    if (med.stock < rx.quantityPrescribed) {
+      alert(`Insufficient stock! ${rx.quantityPrescribed} prescribed, but only ${med.stock} on shelf.`);
+      return;
+    }
+
+    // Co-pay discount
     const itemDiscount = rx.insuranceCoPayRate !== undefined ? (1 - rx.insuranceCoPayRate) * 100 : 0;
-    const additions: CartItem[] = [];
 
-    for (const line of lines) {
-      const med = medications.find((m) => m.id === line.medicationId);
-      if (!med) {
-        showToast(`Medication record for "${line.medicationName}" is missing from current inventory.`, 'warning');
-        return;
-      }
-      const remaining = Math.max(0, line.quantityPrescribed - line.quantityDispensedSoFar);
-      if (med.stock < remaining) {
-        showToast(`Insufficient stock for ${med.name}: ${remaining} required, ${med.stock} available.`, 'warning');
-        return;
-      }
-      const alreadyInCart = activePOSTab.cart.some(
-        (item) => item.prescriptionId === rx.id && item.prescriptionItemId === line.id
+    const existingIndex = activePOSTab.cart.findIndex(
+      (item) => item.medication.id === med.id && item.prescriptionId === rx.id
+    );
+
+    if (existingIndex > -1) {
+      showToast(`Prescription ${rx.rxNumber} already in active tab "${activePOSTab.name}".`, 'info');
+    } else {
+      const newItem: CartItem = {
+        medication: med,
+        quantity: rx.quantityPrescribed,
+        prescriptionId: rx.id,
+        rxNumber: rx.rxNumber,
+        patientName: rx.patientName,
+        discountPercent: itemDiscount,
+      };
+      const updatedCart = [...activePOSTab.cart, newItem];
+      setPosTabs((prev) =>
+        prev.map((t) => {
+          if (t.id === activePOSTab.id) {
+            const isGeneric = /^Tab \d+$/i.test(t.name);
+            const tabName = isGeneric ? `${t.name}: ${rx.patientName}` : t.name;
+            return {
+              ...t,
+              cart: updatedCart,
+              patientName: t.patientName || rx.patientName,
+              name: tabName,
+              isParked: false,
+              updatedAt: Date.now(),
+            };
+          }
+          return t;
+        })
       );
-      if (!alreadyInCart) {
-        additions.push({
-          medication: med,
-          quantity: remaining,
-          prescriptionId: rx.id,
-          prescriptionItemId: line.id,
-          rxNumber: rx.rxNumber,
-          patientName: rx.patientName,
-          discountPercent: itemDiscount,
-        });
-      }
+      playScanSuccessBeep();
+      showToast(
+        `Prescription ${rx.rxNumber} dispensed to "${activePOSTab.name}" (${itemDiscount.toFixed(0)}% co-pay applied).`,
+        'success'
+      );
     }
 
-    if (additions.length === 0) {
-      showToast(`Prescription ${rx.rxNumber} is already in the active checkout.`, 'info');
-      setActiveTab('pos');
-      return;
-    }
-
-    const updatedCart = [...activePOSTab.cart, ...additions];
-    setPosTabs((prev) =>
-      prev.map((t) => {
-        if (t.id !== activePOSTab.id) return t;
-        const isGeneric = /^Tab \d+$/i.test(t.name);
-        const tabName = isGeneric ? `${t.name}: ${rx.patientName}` : t.name;
-        return {
-          ...t,
-          cart: updatedCart,
-          patientName: t.patientName || rx.patientName,
-          name: tabName,
-          isParked: false,
-          updatedAt: Date.now(),
-        };
-      })
-    );
-
-    playScanSuccessBeep();
-    showToast(
-      `Prescription ${rx.rxNumber} loaded: ${additions.length} medication line(s) for ${rx.patientName}.`,
-      'success'
-    );
+    // Switch to POS checkout tab so cashier can tender immediately
     setActiveTab('pos');
   };
 
@@ -853,69 +905,86 @@ export default function App() {
     showToast(`Barcode "${code}" was not recognized in prescriptions or drug catalog.`, 'warning');
   };
 
-  // Sale Finalization: Supabase is the source of truth for online sales.
-  // No local stock or transaction state changes until the authoritative save succeeds.
+  // Sale Finalization with strict pharmaceutical stock and batch validation
   const handleCompleteSale = async (transaction: SaleTransaction): Promise<boolean> => {
-    if (!currentUser) {
-      showToast('Sale rejected: no authenticated user session.', 'error');
-      return false;
-    }
-
+    // 0. Pharmaceutical Compliance Validation: Ensure stock levels NEVER fall below zero during any transaction
     for (const soldItem of transaction.items) {
       const currentMed = medications.find((m) => m.id === soldItem.medicationId);
       if (!currentMed) {
-        showToast(`Sale rejected: ${soldItem.name} is not in the current inventory.`, 'error');
+        showToast(
+          `Pharmaceutical Compliance Error: Drug "${soldItem.name}" does not exist in inventory catalog. Sale aborted.`,
+          'error'
+        );
         return false;
       }
       if (currentMed.stock < soldItem.quantity) {
         showToast(
-          `Sale rejected: ${currentMed.name} has only ${currentMed.stock} units available; ${soldItem.quantity} requested.`,
+          `Pharmaceutical Compliance Error: Stock for "${currentMed.name}" cannot fall below zero! Shelf stock is ${currentMed.stock}, but ${soldItem.quantity} was requested. Sale rejected.`,
           'error'
         );
         return false;
       }
-      if (!soldItem.batchNumber || !soldItem.expiryDate) {
-        showToast(`Sale rejected: batch and expiry information are required for ${soldItem.name}.`, 'error');
-        return false;
-      }
     }
 
+    // 1. Online sales must be committed to Supabase (atomic complete_sale
+    // RPC: deducts stock + records the sale together) BEFORE this device
+    // touches its own local stock/transaction state or reports success.
+    // Offline sales stay queued locally until connectivity returns.
     if (!transaction.isOffline) {
       const saved = await storageService.pushTransactionToCloud(transaction);
       if (!saved) {
         showToast(
-          `Sale ${transaction.receiptNumber} was NOT saved. No local stock deduction was applied. Retry the sale.`,
+          `Sale ${transaction.receiptNumber} was NOT saved. No stock was deducted. Check the connection and try again.`,
           'error'
         );
         return false;
       }
     }
 
+    // 2. Deduct stock from this device's operational cache, strictly enforcing floor of 0.
+    // Stock is NOT separately pushed to Supabase here in either the online or
+    // offline case - for online sales complete_sale() already deducted it
+    // atomically above; for offline sales the eventual queued sync (also
+    // routed through pushTransactionToCloud -> complete_sale) will.
     const updatedMeds = medications.map((med) => {
       const soldItem = transaction.items.find((item) => item.medicationId === med.id);
-      return soldItem ? { ...med, stock: Math.max(0, med.stock - soldItem.quantity) } : med;
+      if (soldItem) {
+        return {
+          ...med,
+          stock: Math.max(0, med.stock - soldItem.quantity),
+        };
+      }
+      return med;
     });
     setMedications(updatedMeds);
     storageService.saveMedications(updatedMeds);
 
+    // 3. Update prescription refill status if applicable
     const updatedRxs = prescriptions.map((rx) => {
       const soldRx = transaction.items.find((item) => item.rxNumber === rx.rxNumber);
-      if (!soldRx) return rx;
-      const newRemaining = Math.max(0, rx.refillsRemaining - 1);
-      return {
-        ...rx,
-        refillsRemaining: newRemaining,
-        quantityDispensedSoFar: rx.quantityDispensedSoFar + soldRx.quantity,
-        status: newRemaining === 0 ? ('Dispensed' as const) : rx.status,
-      };
+      if (soldRx) {
+        const newRemaining = Math.max(0, rx.refillsRemaining - 1);
+        return {
+          ...rx,
+          refillsRemaining: newRemaining,
+          quantityDispensedSoFar: rx.quantityDispensedSoFar + soldRx.quantity,
+          status: newRemaining === 0 ? ('Dispensed' as const) : rx.status,
+        };
+      }
+      return rx;
     });
     setPrescriptions(updatedRxs);
     storageService.savePrescriptions(updatedRxs);
+    updatedRxs
+      .filter((rx) => transaction.items.some((item) => item.rxNumber === rx.rxNumber))
+      .forEach((rx) => storageService.pushPrescriptionToCloud(rx));
 
+    // 4. Persist transaction locally (offline sales are also queued below for later sync)
     const newTxList = [transaction, ...transactions];
     setTransactions(newTxList);
     storageService.saveTransactions(newTxList);
 
+    // 5. Log Audit Trail with strict Batch association
     if (currentUser) {
       const batchDetails = transaction.items
         .map((it) => `${it.name} (Qty: ${it.quantity}, Batch: ${it.batchNumber || 'Unspecified'})`)
@@ -925,26 +994,20 @@ export default function App() {
         userName: currentUser.name,
         userRole: currentUser.role,
         action: 'SALE_COMPLETED',
-        details: `Sale ${transaction.receiptNumber} recorded (${transaction.items.length} items, Total: ${formatKSh(transaction.total)}, Method: ${transaction.paymentMethod}) | Batches Dispensed: [${batchDetails}]`,
+        details: `Sale ${transaction.receiptNumber} recorded (${transaction.items.length} items, Total: ${formatKSh(
+          transaction.total
+        )}, Method: ${transaction.paymentMethod}, Tab: "${activePOSTab.name}") | Batches Dispensed: [${batchDetails}]`,
         category: 'SALES',
       });
       setAuditLogs(storageService.getAuditLogs());
     }
 
-    if (transaction.isOffline) {
-      storageService.addToOfflineQueue(transaction);
-      setOfflineQueue(storageService.getOfflineQueue());
-      showToast(`Sale queued offline (${transaction.receiptNumber}). It will sync when online.`, 'info');
-    } else {
-      showToast(`Sale completed successfully! Receipt ${transaction.receiptNumber}`, 'success');
-    }
-
-    setReceiptModalTx(transaction);
-
+    // 6. Manage Tab Post-Sale
     if (posTabs.length > 1) {
       const remainingTabs = posTabs.filter((t) => t.id !== activePOSTab.id);
       setPosTabs(remainingTabs);
-      setActivePOSTabId(remainingTabs[0]?.id || 'tab-1');
+      setActivePOSTabId(remainingTabs[0].id);
+      showToast(`Sale completed on tab "${activePOSTab.name}". Switched to "${remainingTabs[0].name}".`, 'success');
     } else {
       const freshTab: POSTab = {
         id: `tab-${Date.now()}`,
@@ -957,15 +1020,35 @@ export default function App() {
       };
       setPosTabs([freshTab]);
       setActivePOSTabId(freshTab.id);
+      showToast(`Sale completed successfully! Receipt ${transaction.receiptNumber}`, 'success');
     }
+
+    // 6. Handle Offline Queueing if offline
+    if (transaction.isOffline) {
+      storageService.addToOfflineQueue(transaction);
+      setOfflineQueue(storageService.getOfflineQueue());
+      showToast(`Sale recorded in offline queue (${transaction.receiptNumber}). It will auto-sync when online.`, 'info');
+    }
+
+    // 7. Open thermal receipt modal
+    setReceiptModalTx(transaction);
 
     return true;
   };
 
   // System Data Reset Handler (Admin Only) - wipes stock, sales & activity while strictly preserving shop details & accounts
-  const handleResetSystemData = () => {
+  const handleResetSystemData = async () => {
     if (currentUser.role !== 'admin') {
       showToast('Unauthorized: Only administrators can reset system data.', 'error');
+      return;
+    }
+
+    // The cloud reset must succeed BEFORE any local state is touched -
+    // otherwise the next refresh/hydration would just re-populate this
+    // browser with the old, un-reset data from Supabase.
+    const cloudResetSucceeded = await storageService.resetBusinessDataFromCloud();
+    if (!cloudResetSucceeded) {
+      showToast('Reset failed: Supabase did not confirm the reset. No local data was cleared.', 'error');
       return;
     }
 
@@ -1008,8 +1091,8 @@ export default function App() {
 
   // Authentication & Session
   const handleLogin = (user: User) => {
-    storageService.saveActiveUser(user);
     setCurrentUser(user);
+    setTimeoutMessage(null);
     if (!isTabAllowedForRole(activeTab, user.role)) {
       setActiveTab(defaultTabForRole(user.role));
     }
@@ -1024,6 +1107,19 @@ export default function App() {
   const todayTransactions = transactions.filter((t) => new Date(t.timestamp).toDateString() === today);
   const todayRevenue = todayTransactions.reduce((sum, t) => sum + t.total, 0);
   const todayRevenueFormatted = formatKSh(todayRevenue);
+
+  // While the initial Supabase session check is in flight, show a neutral
+  // loading state instead of flashing a stale dashboard or the login form.
+  if (sessionLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-[3px] border-teal-700 border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs font-semibold text-slate-500">Checking session…</span>
+        </div>
+      </div>
+    );
+  }
 
   // If user is logged out, render standalone login authentication screen
   if (!currentUser) {
@@ -1056,6 +1152,8 @@ export default function App() {
         <LoginView
           onLogin={handleLogin}
           pharmacyName={receiptSettings.pharmacyName}
+          isBootstrapAvailable={isBootstrapAvailable}
+          inactivityMessage={timeoutMessage}
         />
       </>
     );
@@ -1138,19 +1236,6 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'clinical' && (currentUser.role === 'admin' || currentUser.role === 'clinician') && (
-            <ClinicalWorkflowView
-              currentUser={currentUser}
-              patients={patients}
-              consultations={consultations}
-              clinicalTests={clinicalTests}
-              prescriptions={prescriptions}
-              medications={medications}
-              onRefreshClinicalData={() => void refreshClinicalData()}
-              onShowToast={showToast}
-            />
-          )}
-
           {activeTab === 'prescriptions' && (
             <PrescriptionsManager
               prescriptions={prescriptions}
@@ -1170,6 +1255,19 @@ export default function App() {
               userRole={currentUser.role}
               currentUserName={currentUser.name}
               currentUserLicense={currentUser.licenseNumber}
+            />
+          )}
+
+          {activeTab === 'clinical' && (currentUser.role === 'admin' || currentUser.role === 'clinician') && (
+            <ClinicalWorkflowView
+              currentUser={currentUser}
+              patients={patients}
+              consultations={consultations}
+              clinicalTests={clinicalTests}
+              prescriptions={prescriptions}
+              medications={medications}
+              onRefreshClinicalData={refreshClinicalData}
+              onShowToast={showToast}
             />
           )}
 

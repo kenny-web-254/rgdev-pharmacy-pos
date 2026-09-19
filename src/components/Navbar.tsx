@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   FileCheck,
   FlaskConical,
+  HeartPulse,
   History,
   KeyRound,
   LogOut,
@@ -90,6 +91,14 @@ export const Navbar: React.FC<NavbarProps> = ({
       label: 'Prescriptions (Rx)',
       sublabel: isAdmin || currentUser?.role === 'clinician' ? 'Write & manage prescriptions' : 'Dispense & verify',
       icon: <FileCheck className="w-5 h-5 shrink-0" />,
+      bottomNav: true,
+    },
+    {
+      id: 'clinical',
+      label: 'Clinic',
+      sublabel: 'Patients, consultations & Rx',
+      icon: <HeartPulse className="w-5 h-5 shrink-0" />,
+      roles: ['admin', 'clinician'],
       bottomNav: true,
     },
     {

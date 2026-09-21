@@ -251,10 +251,7 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
           const med = medications.find((m) => m.id === rx.medicationId);
           const hasStock = med ? med.stock >= rx.quantityPrescribed : false;
           const isDispensable =
-            (rx.status === 'ISSUED' || rx.status === 'PARTIALLY_DISPENSED') &&
-            rx.status !== 'Dispensed' &&
-            rx.status !== 'Cancelled' &&
-            rx.status !== 'Expired';
+            rx.status === 'ISSUED' || rx.status === 'PARTIALLY_DISPENSED';
 
           const getStatusBadge = () => {
             if (rx.status === 'DISPENSED') return 'bg-blue-100 text-blue-800';
@@ -282,7 +279,7 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
                       <span
                         className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${getStatusBadge()}`}
                       >
-                        {rx.status}
+                        {prescriptionStatusLabel(rx.status)}
                       </span>
                     </div>
                     <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1 font-mono">
@@ -387,11 +384,11 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
               {/* Action */}
               <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
                 <span className="text-[11px] font-medium text-slate-500">
-                  {rx.status === 'Dispensed'
+                  {rx.status === 'DISPENSED'
                     ? '✓ Already fulfilled'
-                    : rx.status === 'Cancelled'
+                    : rx.status === 'CANCELLED'
                     ? '✕ Prescription cancelled'
-                    : rx.status === 'Expired'
+                    : rx.status === 'EXPIRED'
                     ? '✕ Prescription expired'
                     : 'Ready for dispensing'}
                 </span>

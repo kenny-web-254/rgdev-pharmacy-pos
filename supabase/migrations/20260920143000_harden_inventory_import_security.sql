@@ -41,8 +41,9 @@ declare
   v_can_sell_individually boolean;
   v_unit_price numeric;
   v_unit_cost numeric;
+  v_prev_stock integer;
 begin
-  v_role := private.current_pharmacy_role();
+  v_role := lower(private.current_pharmacy_role());
   if v_role is null or lower(v_role) <> 'admin' then raise exception 'Only administrators may import inventory'; end if;
   if p_rows is null or jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) = 0 then raise exception 'Inventory import must contain at least one row'; end if;
   if jsonb_array_length(p_rows) > 2000 then raise exception 'Inventory import is limited to 2,000 rows'; end if;
@@ -93,10 +94,19 @@ begin
       if v_id is null then v_id := 'med-' || gen_random_uuid()::text; end if;
       insert into public.medications(id,name,generic_name,dosage,form,category,is_prescription_required,barcode,price,cost_price,stock,min_stock_level,batch_number,expiry_date,manufacturer,requires_refrigeration,pack_size,stock_unit,sale_unit,can_sell_individually,unit_price,unit_cost,created_at,updated_at)
       values(v_id,v_name,v_generic,v_dosage,v_form,v_category,v_rx,v_barcode,ceil(v_price),v_cost,v_qty,v_min_stock,v_batch,v_expiry,v_manufacturer,v_cold,v_pack_size,v_stock_unit,v_sale_unit,v_can_sell_individually,coalesce(v_unit_price, case when v_pack_size > 0 then v_price / v_pack_size else null end),coalesce(v_unit_cost, case when v_pack_size > 0 then v_cost / v_pack_size else null end),now(),now());
+      if v_qty <> 0 then
+        insert into public.inventory_movements(medication_id,medication_name,movement_type,quantity_change,previous_stock,new_stock,batch_number,reason,user_id,user_name)
+        values(v_id,v_name,'IMPORT_ADD',v_qty,0,v_qty,v_batch,'Inventory import',auth.uid(),v_user_name);
+      end if;
       v_created := v_created + 1;
     else
+      v_prev_stock := v_existing.stock;
       if v_action = 'ADD' then v_new_stock := v_existing.stock + v_qty; elsif v_action = 'REDUCE' then v_new_stock := v_existing.stock - v_qty; if v_new_stock < 0 then raise exception 'REDUCE would make stock negative at import row % (current %, requested %)', v_index, v_existing.stock, v_qty; end if; else v_new_stock := v_qty; end if;
       update public.medications set name=v_name,generic_name=v_generic,dosage=v_dosage,form=v_form,category=v_category,is_prescription_required=v_rx,price=ceil(v_price),cost_price=v_cost,stock=v_new_stock,min_stock_level=v_min_stock,batch_number=v_batch,expiry_date=v_expiry,manufacturer=v_manufacturer,requires_refrigeration=v_cold,pack_size=v_pack_size,stock_unit=v_stock_unit,sale_unit=v_sale_unit,can_sell_individually=v_can_sell_individually,unit_price=coalesce(v_unit_price, case when v_pack_size > 0 then v_price / v_pack_size else null end),unit_cost=coalesce(v_unit_cost, case when v_pack_size > 0 then v_cost / v_pack_size else null end),updated_at=now() where id=v_existing.id;
+      if v_new_stock <> v_prev_stock then
+        insert into public.inventory_movements(medication_id,medication_name,movement_type,quantity_change,previous_stock,new_stock,batch_number,reason,user_id,user_name)
+        values(v_existing.id,v_name,case v_action when 'ADD' then 'IMPORT_ADD' when 'REDUCE' then 'IMPORT_REDUCE' else 'IMPORT_SET' end,v_new_stock-v_prev_stock,v_prev_stock,v_new_stock,v_batch,'Inventory import',auth.uid(),v_user_name);
+      end if;
       v_updated := v_updated + 1;
     end if;
   end loop;

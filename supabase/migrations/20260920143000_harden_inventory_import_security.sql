@@ -1,4 +1,37 @@
 -- Move privileged inventory import implementation out of exposed public schema.
+-- Movement ledger is created here because this migration's import function
+-- records stock changes. Keeping the dependency before the function makes the
+-- migration safe on a brand-new database.
+create table if not exists public.inventory_movements(
+  id text primary key default gen_random_uuid()::text,
+  medication_id text not null references public.medications(id),
+  medication_name text not null,
+  movement_type text not null check (movement_type = any(array[
+    'IMPORT_ADD'::text,'IMPORT_REDUCE'::text,'IMPORT_SET'::text,
+    'SALE'::text,'RETURN'::text,'MANUAL_ADJUSTMENT'::text,'DAMAGE_WRITE_OFF'::text
+  ])),
+  quantity_change integer not null check (quantity_change <> 0),
+  previous_stock integer not null check (previous_stock >= 0),
+  new_stock integer not null check (new_stock >= 0),
+  batch_number text,
+  reason text,
+  user_id uuid,
+  user_name text,
+  sale_transaction_id text,
+  created_at timestamptz not null default now()
+);
+create index if not exists inventory_movements_medication_idx
+  on public.inventory_movements(medication_id, created_at desc);
+create index if not exists inventory_movements_sale_idx
+  on public.inventory_movements(sale_transaction_id);
+alter table public.inventory_movements enable row level security;
+revoke all on public.inventory_movements from anon;
+grant select on public.inventory_movements to authenticated;
+drop policy if exists inventory_movements_admin_select on public.inventory_movements;
+create policy inventory_movements_admin_select on public.inventory_movements
+for select to authenticated
+using (lower(private.current_pharmacy_role()) = 'admin');
+
 -- The public function remains an invoker wrapper so the frontend RPC contract is unchanged.
 
 create or replace function private.import_inventory(p_rows jsonb)

@@ -262,8 +262,9 @@ a = replace_required(
     const result = await import('./services/supabase').then((m) => m.listManagedUsers());
     if (result.ok) setUsers(result.users);
     setAuditLogs(storageService.getAuditLogs());
-    const profile = await getAuthenticatedProfile();
-    setCurrentUser(profile);
+    // Supabase Auth owns the active session. Never replace currentUser from local
+    // storage or from a secondary profile lookup during a module refresh.
+    setCurrentUser((current) => current);
   };""",
     'refreshUsersAndLogs',
 )

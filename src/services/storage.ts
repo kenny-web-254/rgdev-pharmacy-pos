@@ -210,9 +210,13 @@ export const storageService = {
 
   saveMedications(medications: Medication[]): void {
     try {
-      // Pharmaceutical compliance check: enforce stock >= 0 and valid batch strings
+      // Local storage is only a safe catalog cache. Internal purchase costs
+      // must never be persisted on a client device because a cashier/clinician
+      // may later use the same machine.
       const sanitized = medications.map((m) => ({
         ...m,
+        costPrice: 0,
+        unitCost: undefined,
         stock: Math.max(0, Math.floor(Number(m.stock) || 0)),
         minStockLevel: Math.max(0, Math.floor(Number(m.minStockLevel) || 0)),
         batchNumber: m.batchNumber?.trim() || 'BATCH-UNSPECIFIED',
@@ -835,8 +839,8 @@ export const storageService = {
     const client = getSupabase();
     if (!client) return null;
     try {
-      const { data, error } = await client.from('medications').select('*');
-      if (error || !data) return null;
+      const { data, error } = await client.rpc('get_medications_for_session');
+      if (error || !Array.isArray(data)) return null;
       return data.map(rowToMedication);
     } catch (e) {
       console.error('Cloud sync failed (medications pull)', e);
@@ -871,9 +875,22 @@ export const storageService = {
     const client = getSupabase();
     if (!client) return;
     try {
-      await client.from('tests').upsert(testToRow(t));
+      const row = testToRow(t);
+      const { data: existing, error: lookupError } = await client
+        .from('tests')
+        .select('id')
+        .eq('id', t.id)
+        .maybeSingle();
+      if (lookupError) throw lookupError;
+      if (existing) {
+        const { error } = await client.from('tests').update(row).eq('id', t.id);
+        if (error) throw error;
+      } else {
+        const { error } = await client.from('tests').insert(row);
+        if (error) throw error;
+      }
     } catch (e) {
-      console.error('Cloud sync failed (test upsert)', e);
+      console.error('Cloud sync failed (test write)', e);
     }
   },
 
@@ -932,6 +949,12 @@ function medicationToRow(m: Medication) {
     expiry_date: m.expiryDate,
     manufacturer: m.manufacturer,
     requires_refrigeration: !!m.requiresRefrigeration,
+    pack_size: m.packSize ?? 1,
+    stock_unit: m.stockUnit ?? 'Unit',
+    sale_unit: m.saleUnit ?? 'Unit',
+    can_sell_individually: !!m.canSellIndividually,
+    unit_price: m.unitPrice ?? null,
+    unit_cost: m.unitCost ?? null,
   };
 }
 
@@ -945,14 +968,20 @@ function rowToMedication(r: any): Medication {
     category: r.category,
     isPrescriptionRequired: !!r.is_prescription_required,
     barcode: r.barcode,
-    price: Number(r.price),
-    costPrice: Number(r.cost_price),
-    stock: Number(r.stock),
-    minStockLevel: Number(r.min_stock_level),
+    price: Number(r.price || 0),
+    costPrice: Number(r.cost_price || 0),
+    stock: Number(r.stock || 0),
+    minStockLevel: Number(r.min_stock_level || 0),
     batchNumber: r.batch_number,
     expiryDate: r.expiry_date,
     manufacturer: r.manufacturer,
     requiresRefrigeration: !!r.requires_refrigeration,
+    packSize: Number(r.pack_size || 1),
+    stockUnit: r.stock_unit || 'Unit',
+    saleUnit: r.sale_unit || 'Unit',
+    canSellIndividually: !!r.can_sell_individually,
+    unitPrice: r.unit_price == null ? undefined : Number(r.unit_price),
+    unitCost: r.unit_cost == null ? undefined : Number(r.unit_cost),
   };
 }
 

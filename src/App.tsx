@@ -22,7 +22,7 @@ import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
-import { createClinicalPrescriptionToSupabase, getAuthenticatedProfile, getSupabase, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, supabaseConfig, signOutSupabase } from './services/supabase';
+import { createClinicalPrescriptionToSupabase, getAuthenticatedProfile, getSupabase, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, startVisitForPatient, supabaseConfig, signOutSupabase } from './services/supabase';
 import {
   AppNavTab,
   AuditLog,

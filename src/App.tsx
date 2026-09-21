@@ -854,10 +854,17 @@ export default function App() {
   };
 
   // Sale Finalization: Supabase is the source of truth for online sales.
-  // No local stock or transaction state changes until the authoritative save succeeds.
+  // For online checkout, local state is refreshed from the authoritative
+  // database after the RPC succeeds. This prevents multi-item prescription
+  // drift and duplicate/incorrect local stock deductions.
   const handleCompleteSale = async (transaction: SaleTransaction): Promise<boolean> => {
     if (!currentUser) {
       showToast('Sale rejected: no authenticated user session.', 'error');
+      return false;
+    }
+
+    if (currentUser.role !== 'admin' && currentUser.role !== 'cashier') {
+      showToast('Sale rejected: only Admin or Cashier sessions may complete sales.', 'error');
       return false;
     }
 
@@ -880,39 +887,55 @@ export default function App() {
       }
     }
 
-    if (!transaction.isOffline) {
-      const saved = await storageService.pushTransactionToCloud(transaction);
-      if (!saved) {
-        showToast(
-          `Sale ${transaction.receiptNumber} was NOT saved. No local stock deduction was applied. Retry the sale.`,
-          'error'
-        );
-        return false;
-      }
+    if (transaction.isOffline) {
+      // Offline sales are queued locally and are finalized authoritatively
+      // when connectivity returns.
+      const updatedMeds = medications.map((med) => {
+        const quantity = transaction.items
+          .filter((item) => item.medicationId === med.id)
+          .reduce((sum, item) => sum + item.quantity, 0);
+        return quantity > 0 ? { ...med, stock: Math.max(0, med.stock - quantity) } : med;
+      });
+      setMedications(updatedMeds);
+      storageService.saveMedications(updatedMeds);
+
+      const newTxList = [transaction, ...transactions];
+      setTransactions(newTxList);
+      storageService.saveTransactions(newTxList);
+      storageService.addToOfflineQueue(transaction);
+      setOfflineQueue(storageService.getOfflineQueue());
+      setReceiptModalTx(transaction);
+      showToast(`Sale queued offline (${transaction.receiptNumber}). It will sync when online.`, 'info');
+      return true;
     }
 
-    const updatedMeds = medications.map((med) => {
-      const soldItem = transaction.items.find((item) => item.medicationId === med.id);
-      return soldItem ? { ...med, stock: Math.max(0, med.stock - soldItem.quantity) } : med;
-    });
-    setMedications(updatedMeds);
-    storageService.saveMedications(updatedMeds);
+    const saved = await storageService.pushTransactionToCloud(transaction);
+    if (!saved) {
+      showToast(
+        `Sale ${transaction.receiptNumber} was NOT saved. No local stock deduction was applied. Retry the sale.`,
+        'error'
+      );
+      return false;
+    }
 
-    const updatedRxs = prescriptions.map((rx) => {
-      const soldRx = transaction.items.find((item) => item.rxNumber === rx.rxNumber);
-      if (!soldRx) return rx;
-      const newRemaining = Math.max(0, rx.refillsRemaining - 1);
-      return {
-        ...rx,
-        refillsRemaining: newRemaining,
-        quantityDispensedSoFar: rx.quantityDispensedSoFar + soldRx.quantity,
-        status: newRemaining === 0 ? ('Dispensed' as const) : rx.status,
-      };
-    });
-    setPrescriptions(updatedRxs);
-    storageService.savePrescriptions(updatedRxs);
+    const [cloudMeds, cloudRx] = await Promise.all([
+      storageService.pullMedicationsFromCloud(),
+      storageService.pullPrescriptionsFromCloud(),
+    ]);
 
-    const newTxList = [transaction, ...transactions];
+    if (!cloudMeds || !cloudRx) {
+      showToast(
+        `Sale ${transaction.receiptNumber} was saved, but the refreshed stock/dispensing view could not be loaded. Refreshing the page is safe; the database sale is already committed.`,
+        'warning'
+      );
+    } else {
+      setMedications(cloudMeds);
+      storageService.saveMedications(cloudMeds);
+      setPrescriptions(cloudRx);
+      storageService.savePrescriptions(cloudRx);
+    }
+
+    const newTxList = [transaction, ...transactions.filter((tx) => tx.id !== transaction.id)];
     setTransactions(newTxList);
     storageService.saveTransactions(newTxList);
 
@@ -931,15 +954,8 @@ export default function App() {
       setAuditLogs(storageService.getAuditLogs());
     }
 
-    if (transaction.isOffline) {
-      storageService.addToOfflineQueue(transaction);
-      setOfflineQueue(storageService.getOfflineQueue());
-      showToast(`Sale queued offline (${transaction.receiptNumber}). It will sync when online.`, 'info');
-    } else {
-      showToast(`Sale completed successfully! Receipt ${transaction.receiptNumber}`, 'success');
-    }
-
     setReceiptModalTx(transaction);
+    showToast(`Sale completed successfully! Receipt ${transaction.receiptNumber}`, 'success');
 
     if (posTabs.length > 1) {
       const remainingTabs = posTabs.filter((t) => t.id !== activePOSTab.id);

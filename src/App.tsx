@@ -22,7 +22,7 @@ import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
-import { getAuthenticatedProfile, getSupabase, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, supabaseConfig, signOutSupabase } from './services/supabase';
+import { createClinicalPrescriptionToSupabase, getAuthenticatedProfile, getSupabase, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, supabaseConfig, signOutSupabase } from './services/supabase';
 import {
   AppNavTab,
   AuditLog,
@@ -659,148 +659,165 @@ export default function App() {
   };
 
   // Prescription Management Handlers
-  const handleAddNewPrescription = (newRx: Prescription) => {
+  const handleAddNewPrescription = async (newRx: Prescription) => {
     if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'clinician')) {
       showToast('Unauthorized: Only clinicians and administrators can write new prescriptions.', 'warning');
       return;
     }
-    const updated = [newRx, ...prescriptions];
-    setPrescriptions(updated);
-    storageService.savePrescriptions(updated);
-    storageService.pushPrescriptionToCloud(newRx);
+
+    // Every prescription must be tied to a real patient + visit. Standalone
+    // intake resolves those IDs from the authoritative patient directory and
+    // starts an active visit when necessary.
+    let patient = newRx.patientId ? patients.find((p) => p.id === newRx.patientId) : undefined;
+    if (!patient) {
+      patient = patients.find(
+        (p) =>
+          p.fullName.trim().toLowerCase() === newRx.patientName.trim().toLowerCase() &&
+          p.dob === newRx.patientDOB &&
+          p.phone.trim() === newRx.patientPhone.trim()
+      );
+    }
+    if (!patient) {
+      showToast('Prescription was not saved. Register/select the patient in Clinical Workflow first.', 'warning');
+      return;
+    }
+
+    let visitId = newRx.visitId;
+    if (!visitId) {
+      const activeVisit = visits.find((v) => v.patientId === patient.id && v.status === 'ACTIVE');
+      if (activeVisit) {
+        visitId = activeVisit.id;
+      } else {
+        const visitResult = await startVisitForPatient(patient.id);
+        if (!visitResult.ok || !visitResult.visit) {
+          showToast(visitResult.error || 'Unable to start the patient visit for this prescription.', 'warning');
+          return;
+        }
+        visitId = visitResult.visit.id;
+      }
+    }
+
+    const item: import('./types').PrescriptionItem = {
+      id: `rxi-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`}`,
+      medicationId: newRx.medicationId || '',
+      medicationName: newRx.medicationName || '',
+      dosageInstructions: newRx.dosageInstructions || 'As directed',
+      quantityPrescribed: Number(newRx.quantityPrescribed || 0),
+      quantityDispensedSoFar: 0,
+      refillsAllowed: Number(newRx.refillsAllowed || 0),
+      refillsRemaining: Number(newRx.refillsAllowed || 0),
+    };
+
+    if (!item.medicationId || !item.medicationName || item.quantityPrescribed <= 0) {
+      showToast('Prescription was not saved. A medication and positive quantity are required.', 'warning');
+      return;
+    }
+
+    const enrichedRx: Prescription = {
+      ...newRx,
+      id: newRx.id || `rx-${Date.now()}`,
+      patientId: patient.id,
+      visitId,
+      patientName: patient.fullName,
+      patientDOB: patient.dob,
+      patientPhone: patient.phone,
+      status: 'ISSUED',
+      quantityPrescribed: item.quantityPrescribed,
+      quantityDispensedSoFar: 0,
+      items: newRx.items && newRx.items.length > 0 ? newRx.items : [item],
+    };
+
+    const result = await createClinicalPrescriptionToSupabase(
+      enrichedRx,
+      enrichedRx.items || [item]
+    );
+    if (!result.ok) {
+      showToast(result.error || 'Prescription could not be saved to the clinical database.', 'warning');
+      return;
+    }
+
+    const cloudRx = await storageService.pullPrescriptionsFromCloud();
+    if (!cloudRx) {
+      showToast('Prescription was saved, but the refreshed prescription list could not be loaded.', 'warning');
+      return;
+    }
+
+    setPrescriptions(cloudRx);
+    storageService.savePrescriptions(cloudRx);
+
     storageService.addAuditLog({
       userId: currentUser.id,
       userName: currentUser.name,
       userRole: currentUser.role,
       action: 'PRESCRIPTION_CREATED',
-      details: `Registered prescription ${newRx.rxNumber} for ${newRx.patientName} (${newRx.medicationName})`,
+      details: `Registered prescription for ${patient.fullName} (${enrichedRx.medicationName})`,
       category: 'CLINICAL',
     });
     setAuditLogs(storageService.getAuditLogs());
-    showToast(`Prescription ${newRx.rxNumber} for ${newRx.patientName} registered.`, 'success');
+    showToast(`Prescription for ${patient.fullName} registered successfully.`, 'success');
   };
 
   // Clinical Test Handlers (clinician orders & records results)
-  const handleAddNewTest = (newTest: MedicalTest) => {
+  const handleAddNewTest = async (newTest: MedicalTest) => {
     if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'clinician')) {
       showToast('Unauthorized: Only clinicians and administrators can order clinical tests.', 'warning');
       return;
     }
-    const updated = [newTest, ...tests];
+
+    const previousTests = tests;
+    const updated = [newTest, ...previousTests];
     setTests(updated);
     storageService.saveTests(updated);
-    storageService.pushTestToCloud(newTest);
+
+    const saved = await storageService.pushTestToCloud(newTest);
+    if (!saved) {
+      setTests(previousTests);
+      storageService.saveTests(previousTests);
+      showToast('Test order was not saved to the clinical database. No local test record was retained.', 'warning');
+      return;
+    }
+
     storageService.addAuditLog({
       userId: currentUser.id,
       userName: currentUser.name,
       userRole: currentUser.role,
       action: 'TEST_ORDERED',
-      details: `Ordered test ${newTest.testNumber} (${newTest.testType}) for ${newTest.patientName}`,
+      details: `Ordered test ${newTest.testNumber || newTest.id} (${newTest.testType || newTest.testName}) for ${newTest.patientName}`,
       category: 'CLINICAL',
     });
     setAuditLogs(storageService.getAuditLogs());
-    showToast(`Test ${newTest.testNumber} for ${newTest.patientName} ordered.`, 'success');
+    showToast(`Test ${newTest.testNumber || newTest.id} for ${newTest.patientName} ordered.`, 'success');
   };
 
-  const handleUpdateTest = (updatedTest: MedicalTest) => {
+  const handleUpdateTest = async (updatedTest: MedicalTest) => {
     if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'clinician')) {
       showToast('Unauthorized: Only clinicians and administrators can record test results.', 'warning');
       return;
     }
+
+    const previousTests = tests;
     const updated = tests.map((t) => (t.id === updatedTest.id ? updatedTest : t));
     setTests(updated);
     storageService.saveTests(updated);
-    storageService.pushTestToCloud(updatedTest);
+
+    const saved = await storageService.pushTestToCloud(updatedTest);
+    if (!saved) {
+      setTests(previousTests);
+      storageService.saveTests(previousTests);
+      showToast('Test result was not saved to the clinical database. The previous local record was restored.', 'warning');
+      return;
+    }
+
     storageService.addAuditLog({
       userId: currentUser.id,
       userName: currentUser.name,
       userRole: currentUser.role,
       action: 'TEST_UPDATED',
-      details: `Updated test ${updatedTest.testNumber} for ${updatedTest.patientName} to status "${updatedTest.status}"`,
+      details: `Updated test ${updatedTest.testNumber || updatedTest.id} for ${updatedTest.patientName} to status "${updatedTest.status}"`,
       category: 'CLINICAL',
     });
     setAuditLogs(storageService.getAuditLogs());
-    showToast(`Test ${updatedTest.testNumber} updated.`, 'success');
-  };
-
-  const handleDispensePrescriptionToCart = (rx: Prescription) => {
-    const lines = rx.items && rx.items.length > 0
-      ? rx.items.filter((item) => item.quantityPrescribed - item.quantityDispensedSoFar > 0)
-      : [{
-          id: `legacy-${rx.id}`,
-          medicationId: rx.medicationId || '',
-          medicationName: rx.medicationName,
-          dosageInstructions: rx.dosageInstructions || '',
-          quantityPrescribed: rx.quantityPrescribed,
-          quantityDispensedSoFar: rx.quantityDispensedSoFar || 0,
-          refillsAllowed: rx.refillsAllowed || 0,
-          refillsRemaining: rx.refillsRemaining || 0,
-        }];
-
-    if (lines.length === 0) {
-      showToast(`Prescription ${rx.rxNumber} has no remaining quantities to dispense.`, 'warning');
-      return;
-    }
-
-    const itemDiscount = rx.insuranceCoPayRate !== undefined ? (1 - rx.insuranceCoPayRate) * 100 : 0;
-    const additions: CartItem[] = [];
-
-    for (const line of lines) {
-      const med = medications.find((m) => m.id === line.medicationId);
-      if (!med) {
-        showToast(`Medication record for "${line.medicationName}" is missing from current inventory.`, 'warning');
-        return;
-      }
-      const remaining = Math.max(0, line.quantityPrescribed - line.quantityDispensedSoFar);
-      if (med.stock < remaining) {
-        showToast(`Insufficient stock for ${med.name}: ${remaining} required, ${med.stock} available.`, 'warning');
-        return;
-      }
-      const alreadyInCart = activePOSTab.cart.some(
-        (item) => item.prescriptionId === rx.id && item.prescriptionItemId === line.id
-      );
-      if (!alreadyInCart) {
-        additions.push({
-          medication: med,
-          quantity: remaining,
-          prescriptionId: rx.id,
-          prescriptionItemId: line.id,
-          rxNumber: rx.rxNumber,
-          patientName: rx.patientName,
-          discountPercent: itemDiscount,
-        });
-      }
-    }
-
-    if (additions.length === 0) {
-      showToast(`Prescription ${rx.rxNumber} is already in the active checkout.`, 'info');
-      setActiveTab('pos');
-      return;
-    }
-
-    const updatedCart = [...activePOSTab.cart, ...additions];
-    setPosTabs((prev) =>
-      prev.map((t) => {
-        if (t.id !== activePOSTab.id) return t;
-        const isGeneric = /^Tab \d+$/i.test(t.name);
-        const tabName = isGeneric ? `${t.name}: ${rx.patientName}` : t.name;
-        return {
-          ...t,
-          cart: updatedCart,
-          patientName: t.patientName || rx.patientName,
-          name: tabName,
-          isParked: false,
-          updatedAt: Date.now(),
-        };
-      })
-    );
-
-    playScanSuccessBeep();
-    showToast(
-      `Prescription ${rx.rxNumber} loaded: ${additions.length} medication line(s) for ${rx.patientName}.`,
-      'success'
-    );
-    setActiveTab('pos');
+    showToast(`Test ${updatedTest.testNumber || updatedTest.id} updated.`, 'success');
   };
 
   // Barcode Detection Handler

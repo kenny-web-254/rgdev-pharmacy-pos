@@ -848,13 +848,16 @@ export const storageService = {
     }
   },
 
-  async pushPrescriptionToCloud(rx: Prescription): Promise<void> {
+  async pushPrescriptionToCloud(rx: Prescription): Promise<boolean> {
     const client = getSupabase();
-    if (!client) return;
+    if (!client) return false;
     try {
-      await client.from('prescriptions').upsert(prescriptionToRow(rx));
+      const { error } = await client.from('prescriptions').upsert(prescriptionToRow(rx));
+      if (error) throw error;
+      return true;
     } catch (e) {
       console.error('Cloud sync failed (prescription upsert)', e);
+      return false;
     }
   },
 
@@ -871,9 +874,9 @@ export const storageService = {
     }
   },
 
-  async pushTestToCloud(t: MedicalTest): Promise<void> {
+  async pushTestToCloud(t: MedicalTest): Promise<boolean> {
     const client = getSupabase();
-    if (!client) return;
+    if (!client) return false;
     try {
       const row = testToRow(t);
       const { data: existing, error: lookupError } = await client
@@ -889,8 +892,10 @@ export const storageService = {
         const { error } = await client.from('tests').insert(row);
         if (error) throw error;
       }
+      return true;
     } catch (e) {
       console.error('Cloud sync failed (test write)', e);
+      return false;
     }
   },
 

@@ -2,19 +2,21 @@ name: Production checks
 
 on:
   push:
-    branches: [main]
+    branches: [main, debug/production-build-check]
+    paths-ignore:
+      - 'ci-diagnostics/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - 'ci-diagnostics/**'
 
 permissions:
-  contents: read
-  issues: write
-  pull-requests: write
+  contents: write
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,41 +27,45 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Pre-build typecheck (diagnostic only)
-        run: npm run lint
-        continue-on-error: true
-
-      - name: Production build
+      - name: Full production diagnostics
         shell: bash
         run: |
           set +e
-          npm run build > build.log 2>&1
-          code=$?
-          cat build.log
-          echo "$code" > build.exit
-          exit "$code"
+          : > ci-build.log
+          echo "=== ENVIRONMENT ===" | tee -a ci-build.log
+          node --version 2>&1 | tee -a ci-build.log
+          npm --version 2>&1 | tee -a ci-build.log
+          echo "=== INSTALL ===" | tee -a ci-build.log
+          npm ci 2>&1 | tee -a ci-build.log
+          install_code=${PIPESTATUS[0]}
+          echo "npm ci exit: $install_code" | tee -a ci-build.log
+          echo "=== LINT ===" | tee -a ci-build.log
+          npm run lint 2>&1 | tee -a ci-build.log
+          lint_code=${PIPESTATUS[0]}
+          echo "npm run lint exit: $lint_code" | tee -a ci-build.log
+          echo "=== BUILD ===" | tee -a ci-build.log
+          npm run build 2>&1 | tee -a ci-build.log
+          build_code=${PIPESTATUS[0]}
+          echo "npm run build exit: $build_code" | tee -a ci-build.log
+          echo "=== FINAL ===" | tee -a ci-build.log
+          printf 'install=%s lint=%s build=%s\n' "$install_code" "$lint_code" "$build_code" | tee -a ci-build.log
+          exit 0
 
-      - name: Upload build diagnostics
+      - name: Persist diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-build-diagnostics
-          path: |
-            build.log
-            build.exit
-      - name: Comment build diagnostics on PR
-        if: failure()
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const log = fs.existsSync('build.log') ? fs.readFileSync('build.log', 'utf8') : 'build.log was not created.';
-            const excerpt = log.slice(-18000);
-            const body = '## Production build diagnostics\n\nThe Vercel-equivalent build failed. Last log output:\n\n```text\n' + excerpt + '\n```';
-            const issueNumber = context.payload.pull_request?.number;
-            if (issueNumber) {
-              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: issueNumber, body });
-            }
+            const log = fs.existsSync('ci-build.log') ? fs.readFileSync('ci-build.log', 'utf8') : 'ci-build.log was not created.';
+            const path = `ci-diagnostics/run-${context.runId}.log`;
+            const content = Buffer.from(log).toString('base64');
+            await github.rest.repos.createOrUpdateFileContents({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path,
+              message: `ci: record production diagnostics run ${context.runId}`,
+              content,
+              branch: context.payload.pull_request?.head?.ref || context.ref.replace('refs/heads/','')
+            });
+            core.notice(`Diagnostics written to ${path}`);

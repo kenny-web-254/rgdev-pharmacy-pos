@@ -245,9 +245,10 @@ export default function App() {
   };
 
   const refreshUsersAndLogs = () => {
+    // Supabase Auth is the authentication authority. Refreshing local module
+    // data must never replace the live authenticated session with localStorage.
     setUsers(storageService.getUsers());
     setAuditLogs(storageService.getAuditLogs());
-    setCurrentUser(storageService.getActiveUser());
   };
 
   const handleLogout = () => {

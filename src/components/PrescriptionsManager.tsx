@@ -22,6 +22,18 @@ import {
 } from 'lucide-react';
 import { Medication, Prescription, PrescriptionStatus, UserRole } from '../types';
 
+const STATUS_FILTERS: Array<{ value: 'All' | PrescriptionStatus; label: string }> = [
+  { value: 'All', label: 'All' },
+  { value: 'ISSUED', label: 'Issued' },
+  { value: 'PARTIALLY_DISPENSED', label: 'Partially Dispensed' },
+  { value: 'DISPENSED', label: 'Dispensed' },
+  { value: 'EXPIRED', label: 'Expired' },
+  { value: 'CANCELLED', label: 'Cancelled' },
+];
+
+const prescriptionStatusLabel = (status: PrescriptionStatus) =>
+  STATUS_FILTERS.find((item) => item.value === status)?.label || status;
+
 interface PrescriptionsManagerProps {
   prescriptions: Prescription[];
   medications: Medication[];
@@ -40,7 +52,7 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
   userRole,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [statusFilter, setStatusFilter] = useState<'All' | PrescriptionStatus>('All');
   const [selectedRxForLabel, setSelectedRxForLabel] = useState<Prescription | null>(null);
   const [isNewRxModalOpen, setIsNewRxModalOpen] = useState(false);
   const [newRxError, setNewRxError] = useState<string | null>(null);
@@ -151,7 +163,7 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
       refillsRemaining: Number(newRx.refillsAllowed) || 1,
       dateIssued: newRx.dateIssued || '2026-09-08',
       expiryDate: newRx.expiryDate || '2027-09-08',
-      status: 'Active',
+      status: 'ISSUED',
       insuranceProvider: newRx.insuranceProvider || 'Standard Health',
       insuranceCoPayRate: Number(newRx.insuranceCoPayRate) || 0.2,
     };
@@ -217,17 +229,17 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 self-start md:self-auto overflow-x-auto w-full md:w-auto">
-          {['All', 'Issued', 'Partially Dispensed', 'Dispensed', 'Expired', 'Cancelled'].map((st) => (
+          {STATUS_FILTERS.map((filter) => (
             <button
-              key={st}
-              onClick={() => setStatusFilter(st)}
+              key={filter.value}
+              onClick={() => setStatusFilter(filter.value)}
               className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
-                statusFilter === st
+                statusFilter === filter.value
                   ? 'bg-teal-700 text-white shadow-xs'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
-              {st} ({st === 'All' ? prescriptions.length : prescriptions.filter((r) => r.status === st || (st === 'Issued' && r.status === 'Active')).length})
+              {filter.label} ({filter.value === 'All' ? prescriptions.length : prescriptions.filter((r) => r.status === filter.value).length})
             </button>
           ))}
         </div>
@@ -239,16 +251,16 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
           const med = medications.find((m) => m.id === rx.medicationId);
           const hasStock = med ? med.stock >= rx.quantityPrescribed : false;
           const isDispensable =
-            (rx.status === 'Active' || rx.status === 'Issued' || rx.status === 'Partially Dispensed') &&
+            (rx.status === 'ISSUED' || rx.status === 'PARTIALLY_DISPENSED') &&
             rx.status !== 'Dispensed' &&
             rx.status !== 'Cancelled' &&
             rx.status !== 'Expired';
 
           const getStatusBadge = () => {
-            if (rx.status === 'Dispensed') return 'bg-blue-100 text-blue-800';
-            if (rx.status === 'Partially Dispensed') return 'bg-amber-100 text-amber-800';
-            if (rx.status === 'Expired') return 'bg-rose-100 text-rose-800';
-            if (rx.status === 'Cancelled') return 'bg-slate-200 text-slate-700';
+            if (rx.status === 'DISPENSED') return 'bg-blue-100 text-blue-800';
+            if (rx.status === 'PARTIALLY_DISPENSED') return 'bg-amber-100 text-amber-800';
+            if (rx.status === 'EXPIRED') return 'bg-rose-100 text-rose-800';
+            if (rx.status === 'CANCELLED') return 'bg-slate-200 text-slate-700';
             return 'bg-emerald-100 text-emerald-800';
           };
 

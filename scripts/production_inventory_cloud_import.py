@@ -42,6 +42,12 @@ replacement = '''  const commit = async () => {
         expiryDate: medication.expiryDate,
         manufacturer: medication.manufacturer,
         requiresRefrigeration: medication.requiresRefrigeration,
+        packSize: medication.packSize ?? 1,
+        stockUnit: medication.stockUnit ?? 'Unit',
+        saleUnit: medication.saleUnit ?? medication.stockUnit ?? 'Unit',
+        canSellIndividually: medication.canSellIndividually ?? false,
+        unitPrice: medication.unitPrice ?? null,
+        unitCost: medication.unitCost ?? null,
       }));
 
       const { data, error: rpcError } = await getSupabase()!.rpc('import_inventory', { p_rows: rows });

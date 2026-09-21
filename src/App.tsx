@@ -22,7 +22,7 @@ import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
-import { createClinicalPrescriptionToSupabase, getAuthenticatedProfile, getSupabase, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, startVisitForPatient, supabaseConfig, signOutSupabase } from './services/supabase';
+import { createClinicalPrescriptionToSupabase, getAuthenticatedProfile, getSupabase, listManagedUsers, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, startVisitForPatient, supabaseConfig, signOutSupabase } from './services/supabase';
 import {
   AppNavTab,
   AuditLog,
@@ -244,10 +244,10 @@ export default function App() {
     }, 4000);
   };
 
-  const refreshUsersAndLogs = () => {
-    // Supabase Auth is the authentication authority. Refreshing local module
-    // data must never replace the live authenticated session with localStorage.
-    setUsers(storageService.getUsers());
+  const refreshUsersAndLogs = async () => {
+    // User records come from Supabase; the active session still comes only from Auth.
+    const result = await listManagedUsers();
+    if (result.ok) setUsers(result.users);
     setAuditLogs(storageService.getAuditLogs());
   };
 

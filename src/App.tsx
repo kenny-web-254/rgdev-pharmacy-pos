@@ -22,7 +22,7 @@ import { storageService } from './services/storage';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
-import { getAuthenticatedProfile, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, supabaseConfig, signOutSupabase } from './services/supabase';
+import { getAuthenticatedProfile, getSupabase, onSupabaseAuthStateChange, pullClinicalTestsFromSupabase, pullConsultationsFromSupabase, pullPatientsFromSupabase, pullVisitsFromSupabase, supabaseConfig, signOutSupabase } from './services/supabase';
 import {
   AppNavTab,
   AuditLog,
@@ -589,7 +589,7 @@ export default function App() {
     showToast(`Removed ${item?.name || 'item'} from inventory.`, 'info');
   };
 
-  const handleAdjustStock = (
+  const handleAdjustStock = async (
     medicationId: string,
     newStock: number,
     reason: string,
@@ -605,56 +605,57 @@ export default function App() {
       showToast('Medication not found in inventory.', 'error');
       return;
     }
-
-    // Stricter Validation: Stock levels can never fall below zero
     if (typeof newStock !== 'number' || isNaN(newStock) || newStock < 0) {
       showToast(`Compliance Error: Stock levels cannot fall below zero (requested: ${newStock}). Transaction rejected.`, 'error');
       return;
     }
-
-    // Stricter Validation: Batch information must be strictly associated with every product adjustment
     const batch = (newBatchNumber && newBatchNumber.trim()) || med.batchNumber?.trim();
-    if (!batch) {
-      showToast('Pharmaceutical Compliance Error: Every stock adjustment must be strictly associated with a valid batch/lot number.', 'error');
-      return;
-    }
-
     const expiry = (newExpiryDate && newExpiryDate.trim()) || med.expiryDate?.trim();
+    if (!batch) {
+      showToast('Pharmaceutical Compliance Error: A valid batch/lot number is required.', 'error');
+      return;
+    }
     if (!expiry) {
-      showToast('Pharmaceutical Compliance Error: Valid expiration date is required for stock adjustment batch association.', 'error');
+      showToast('Pharmaceutical Compliance Error: A valid expiration date is required.', 'error');
       return;
     }
-
     if (!reason || !reason.trim()) {
-      showToast('Pharmaceutical Compliance Error: Reason is mandatory for regulatory audit compliance.', 'error');
+      showToast('Pharmaceutical Compliance Error: An adjustment reason is required for audit compliance.', 'error');
       return;
     }
 
-    const prevStock = med.stock;
-    const cleanStock = Math.max(0, Math.floor(newStock));
-    const diff = cleanStock - prevStock;
+    const client = supabaseConfig.isConfigured() ? getSupabase() : null;
+    if (!client) {
+      showToast('Inventory adjustment requires the connected Supabase database.', 'error');
+      return;
+    }
 
-    const updated: Medication = {
-      ...med,
-      stock: cleanStock,
-      batchNumber: batch,
-      expiryDate: expiry,
-    };
-    const updatedList = medications.map((m) => (m.id === medicationId ? updated : m));
-    setMedications(updatedList);
-    storageService.saveMedications(updatedList);
-    storageService.pushMedicationToCloud(updated);
-
-    storageService.addAuditLog({
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userRole: currentUser.role,
-      action: 'STOCK_ADJUSTMENT',
-      details: `Compliance Verified | Product: "${med.name}" | Batch: "${batch}" | Expiry: "${expiry}" | Previous Stock: ${prevStock} -> New Stock: ${cleanStock} (Adjustment: ${diff >= 0 ? '+' : ''}${diff}) | Reason: ${reason.trim()}`,
-      category: 'INVENTORY',
+    const { data, error } = await client.rpc('adjust_inventory', {
+      p_medication_id: medicationId,
+      p_new_stock: Math.floor(newStock),
+      p_reason: reason.trim(),
+      p_batch_number: batch,
+      p_expiry_date: expiry,
     });
+
+    if (error || !data?.ok) {
+      showToast(error?.message || 'Inventory adjustment was not saved.', 'error');
+      return;
+    }
+
+    const cloudMeds = await storageService.pullMedicationsFromCloud();
+    if (cloudMeds) {
+      setMedications(cloudMeds);
+      storageService.saveMedications(cloudMeds);
+    }
+
+    const previousStock = med.stock;
+    const diff = Math.floor(newStock) - previousStock;
     setAuditLogs(storageService.getAuditLogs());
-    showToast(`Stock adjusted for ${med.name}: ${prevStock} -> ${cleanStock} (${diff >= 0 ? '+' : ''}${diff}) [Batch: ${batch}]`, 'success');
+    showToast(
+      `Stock adjusted for ${med.name}: ${previousStock} -> ${Math.floor(newStock)} (${diff >= 0 ? '+' : ''}${diff}) [Batch: ${batch}]`,
+      'success'
+    );
   };
 
   // Prescription Management Handlers

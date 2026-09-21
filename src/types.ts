@@ -50,7 +50,7 @@ export interface Medication {
   unitCost?: number;
 }
 
-export type PrescriptionStatus = 'Draft' | 'Issued' | 'Partially Dispensed' | 'Dispensed' | 'Cancelled' | 'Expired' | 'Active';
+export type PrescriptionStatus = 'DRAFT' | 'ISSUED' | 'PARTIALLY_DISPENSED' | 'DISPENSED' | 'CANCELLED' | 'EXPIRED';
 
 export interface PrescriptionItem { id: string; medicationId: string; medicationName: string; genericName?: string; dosageInstructions: string; quantityPrescribed: number; quantityDispensedSoFar: number; refillsAllowed: number; refillsRemaining: number; }
 export interface Prescription {
@@ -75,7 +75,7 @@ export interface CartItem {
   quantity: number;
   /** false = smallest sale unit; true = whole pack/container. */
   saleAsPack?: boolean;
-  prescriptionId?: string; rxNumber?: string; patientName?: string; discountPercent?: number;
+  prescriptionId?: string; prescriptionItemId?: string; rxNumber?: string; patientName?: string; discountPercent?: number;
 }
 export interface POSTab { id: string; name: string; cart: CartItem[]; patientName?: string; isParked?: boolean; notes?: string; createdAt: number; updatedAt: number; }
 export type PaymentMethod = 'Cash' | 'M-Pesa' | 'Partial (Cash + M-Pesa)' | 'Credit/Debit Card' | 'Insurance';

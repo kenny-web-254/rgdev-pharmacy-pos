@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Barcode,
@@ -40,6 +40,7 @@ import {
 import { playScanSuccessBeep } from '../utils/audio';
 import { formatKSh } from '../utils/currency';
 import { storageService } from '../services/storage';
+import { fuzzySearchMedications, findBestQuickAddMatch } from '../utils/fuzzySearch';
 
 interface POSTerminalProps {
   medications: Medication[];
@@ -176,29 +177,10 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onAddTab, onToggleParkTab, onCloseTab, onSelectTab, currentTab, tabs]);
 
-  // Compute the first matching medication with prefix priority for Quick Add
-  const normalizedQuickAdd = quickAddInput.trim().toLowerCase();
-  const firstQuickAddMatch = normalizedQuickAdd
-    ? medications
-        .slice()
-        .sort((a, b) => {
-          const aStarts = a.name.toLowerCase().startsWith(normalizedQuickAdd);
-          const bStarts = b.name.toLowerCase().startsWith(normalizedQuickAdd);
-          if (aStarts && !bStarts) return -1;
-          if (!aStarts && bStarts) return 1;
-          const aGenStarts = a.genericName.toLowerCase().startsWith(normalizedQuickAdd);
-          const bGenStarts = b.genericName.toLowerCase().startsWith(normalizedQuickAdd);
-          if (aGenStarts && !bGenStarts) return -1;
-          if (!aGenStarts && bGenStarts) return 1;
-          return 0;
-        })
-        .find(
-          (m) =>
-            m.name.toLowerCase().includes(normalizedQuickAdd) ||
-            m.genericName.toLowerCase().includes(normalizedQuickAdd) ||
-            m.barcode.toLowerCase() === normalizedQuickAdd
-        )
-    : null;
+  // Compute the first matching medication using fuzzy search for Quick Add
+  const firstQuickAddMatch = useMemo(() => {
+    return findBestQuickAddMatch(medications, quickAddInput);
+  }, [medications, quickAddInput]);
 
   // Payment checkout modal state
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
@@ -252,17 +234,10 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
     return diffDays > 0 && diffDays <= 90;
   };
 
-  // Filter medications
-  const filteredMedications = medications.filter((m) => {
-    const matchesSearch =
-      m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      m.genericName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      m.barcode.toLowerCase().includes(searchQuery.toLowerCase());
-
-    if (!matchesSearch) return false;
-    if (selectedCategory !== 'All' && m.category !== selectedCategory) return false;
-    return true;
-  });
+  // Filter and rank medications using fuzzy matching across name, genericName, category, dosage, and barcode
+  const { results: filteredMedications, matchDetails } = useMemo(() => {
+    return fuzzySearchMedications(medications, searchQuery, selectedCategory);
+  }, [medications, searchQuery, selectedCategory]);
 
   // Cart operations
   const handleAddToCart = (med: Medication, prescription?: Prescription) => {
@@ -1102,16 +1077,78 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
               </button>
             </div>
 
-          {/* Search by drug name & Generic */}
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search medication catalog by brand, active ingredient or category..."
-              className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-teal-500"
-            />
+          {/* Search by drug name, active generic, category or barcode with fuzzy tolerance */}
+          <div className="space-y-2">
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-teal-700" />
+              <input
+                id="pos-catalog-search-input"
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setSearchQuery('');
+                  }
+                }}
+                placeholder="Fuzzy search catalog: brand (e.g. Panadol), generic (Amox), category (Antibiotics)..."
+                className="w-full pl-9 pr-24 py-2.5 text-xs sm:text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-teal-500 focus:border-teal-500 bg-white placeholder:text-slate-400 font-medium transition shadow-2xs"
+              />
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                {searchQuery && (
+                  <button
+                    type="button"
+                    id="pos-clear-search-btn"
+                    onClick={() => setSearchQuery('')}
+                    className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md transition cursor-pointer"
+                    title="Clear search (Esc)"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono font-semibold px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200">
+                  <Zap className="w-2.5 h-2.5 fill-teal-700" />
+                  Fuzzy
+                </span>
+              </div>
+            </div>
+
+            {/* Dynamic Search & Filter Feedback Bar */}
+            {searchQuery.trim() && (
+              <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-600">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-900">
+                    {filteredMedications.length} {filteredMedications.length === 1 ? 'match' : 'matches'} found
+                  </span>
+                  <span className="text-slate-300">•</span>
+                  <span className="text-slate-500 truncate max-w-[200px]">
+                    Query: &ldquo;<strong className="text-teal-800">{searchQuery}</strong>&rdquo;
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {selectedCategory !== 'All' && (
+                    <span className="inline-flex items-center gap-1 text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md border border-slate-200 font-medium">
+                      In {selectedCategory}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCategory('All')}
+                        className="hover:text-rose-600 font-bold ml-1 cursor-pointer"
+                        title="Reset category filter"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="text-[11px] text-teal-700 hover:text-teal-900 font-bold hover:underline cursor-pointer"
+                  >
+                    Clear Search
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Category Tabs */}
@@ -1120,7 +1157,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition ${
+                className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition cursor-pointer ${
                   selectedCategory === cat
                     ? 'bg-teal-700 text-white shadow-xs'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -1134,84 +1171,143 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
 
         {/* Medication Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[620px] overflow-y-auto pr-1">
-          {filteredMedications.map((med) => {
-            const isLow = med.stock <= med.minStockLevel;
-            const isOut = med.stock === 0;
-            const expired = isExpired(med.expiryDate);
-            const expiringSoon = !expired && isExpiringSoon(med.expiryDate);
-
-            return (
-              <div
-                key={med.id}
-                onClick={() => !isOut && !expired && handleAddToCart(med)}
-                className={`bg-white p-3.5 rounded-2xl border transition-all flex flex-col justify-between cursor-pointer group ${
-                  expired
-                    ? 'border-rose-300 bg-rose-50/30 opacity-75 cursor-not-allowed'
-                    : isOut
-                    ? 'opacity-50 border-slate-200 cursor-not-allowed'
-                    : 'border-slate-200 hover:border-teal-500 hover:shadow-md'
-                }`}
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-1 mb-1">
-                    <span
-                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md uppercase ${
-                        med.isPrescriptionRequired
-                          ? 'bg-purple-100 text-purple-700'
-                          : 'bg-emerald-100 text-emerald-700'
-                      }`}
-                    >
-                      {med.isPrescriptionRequired ? 'Rx Script' : 'OTC'}
-                    </span>
-
-                    <span
-                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
-                        expired
-                          ? 'bg-rose-100 text-rose-700'
-                          : isOut
-                          ? 'bg-red-100 text-red-700'
-                          : isLow
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      {expired
-                        ? `Expired (${med.expiryDate})`
-                        : isOut
-                        ? 'Out of Stock'
-                        : `${med.stock} in stock`}
-                    </span>
-                  </div>
-
-                  <h3 className="text-sm font-bold text-slate-900 group-hover:text-teal-700 transition">
-                    {med.name}
-                  </h3>
-                  <p className="text-[11px] text-slate-500 italic line-clamp-1">{med.genericName}</p>
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 mt-0.5">
-                    <span>{med.dosage} • {med.form}</span>
-                    {expiringSoon && (
-                      <span className="text-amber-700 font-bold bg-amber-50 px-1 rounded">
-                        Exp: {med.expiryDate}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100">
-                  <span className="text-sm font-extrabold text-slate-900">
-                    {formatKSh(med.price)}
-                  </span>
-                  <button
-                    disabled={isOut || expired}
-                    className="p-1.5 rounded-xl bg-teal-50 text-teal-700 group-hover:bg-teal-700 group-hover:text-white transition disabled:opacity-40"
-                    title={expired ? 'Medication Expired' : isOut ? 'Out of Stock' : 'Add to Dispense Cart'}
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </div>
+          {filteredMedications.length === 0 ? (
+            <div className="col-span-full py-12 px-4 text-center bg-white rounded-2xl border border-dashed border-slate-200">
+              <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mx-auto mb-3">
+                <Search className="w-6 h-6" />
               </div>
-            );
-          })}
+              <h3 className="text-sm font-bold text-slate-900 mb-1">
+                No medications matched your fuzzy search
+              </h3>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto mb-4">
+                No items found matching &ldquo;{searchQuery}&rdquo;{selectedCategory !== 'All' ? ` within category "${selectedCategory}"` : ''}. 
+                Try checking the spelling or resetting active filters.
+              </p>
+              <div className="flex items-center justify-center gap-2">
+                {selectedCategory !== 'All' && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategory('All')}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition cursor-pointer"
+                  >
+                    Clear Category
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSelectedCategory('All');
+                  }}
+                  className="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-teal-700 text-white hover:bg-teal-800 transition shadow-2xs cursor-pointer"
+                >
+                  Reset All Filters
+                </button>
+              </div>
+            </div>
+          ) : (
+            filteredMedications.map((med) => {
+              const isLow = med.stock <= med.minStockLevel;
+              const isOut = med.stock === 0;
+              const expired = isExpired(med.expiryDate);
+              const expiringSoon = !expired && isExpiringSoon(med.expiryDate);
+              const match = matchDetails.get(med.id);
+
+              return (
+                <div
+                  key={med.id}
+                  onClick={() => !isOut && !expired && handleAddToCart(med)}
+                  className={`bg-white p-3.5 rounded-2xl border transition-all flex flex-col justify-between cursor-pointer group ${
+                    expired
+                      ? 'border-rose-300 bg-rose-50/30 opacity-75 cursor-not-allowed'
+                      : isOut
+                      ? 'opacity-50 border-slate-200 cursor-not-allowed'
+                      : 'border-slate-200 hover:border-teal-500 hover:shadow-md'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-1 mb-1">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md uppercase ${
+                            med.isPrescriptionRequired
+                              ? 'bg-purple-100 text-purple-700'
+                              : 'bg-emerald-100 text-emerald-700'
+                          }`}
+                        >
+                          {med.isPrescriptionRequired ? 'Rx Script' : 'OTC'}
+                        </span>
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                          {med.category}
+                        </span>
+                      </div>
+
+                      <span
+                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+                          expired
+                            ? 'bg-rose-100 text-rose-700'
+                            : isOut
+                            ? 'bg-red-100 text-red-700'
+                            : isLow
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {expired
+                          ? `Expired (${med.expiryDate})`
+                          : isOut
+                          ? 'Out of Stock'
+                          : `${med.stock} in stock`}
+                      </span>
+                    </div>
+
+                    <h3 className="text-sm font-bold text-slate-900 group-hover:text-teal-700 transition">
+                      {med.name}
+                    </h3>
+                    <p className="text-[11px] text-slate-500 italic line-clamp-1">{med.genericName}</p>
+                    
+                    {/* Search match badge if matched via fuzzy category or typo */}
+                    {searchQuery.trim() && match && (
+                      <div className="mt-1 flex items-center gap-1 flex-wrap">
+                        {match.categoryMatch && (
+                          <span className="text-[9px] font-bold text-teal-800 bg-teal-50 border border-teal-200 px-1.5 py-0.2 rounded">
+                            Category matched: {match.categoryMatch}
+                          </span>
+                        )}
+                        {match.isFuzzyTypo && (
+                          <span className="text-[9px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded">
+                            Fuzzy match
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
+                      <span>{med.dosage} • {med.form}</span>
+                      {expiringSoon && (
+                        <span className="text-amber-700 font-bold bg-amber-50 px-1 rounded">
+                          Exp: {med.expiryDate}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between mt-3 pt-2 border-t border-slate-100">
+                    <span className="text-sm font-extrabold text-slate-900">
+                      {formatKSh(med.price)}
+                    </span>
+                    <button
+                      disabled={isOut || expired}
+                      className="p-1.5 rounded-xl bg-teal-50 text-teal-700 group-hover:bg-teal-700 group-hover:text-white transition disabled:opacity-40"
+                      title={expired ? 'Medication Expired' : isOut ? 'Out of Stock' : 'Add to Dispense Cart'}
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
 

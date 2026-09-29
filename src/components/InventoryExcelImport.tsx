@@ -95,7 +95,7 @@ function buildMedication(row: ImportRow, existing?: Medication): { medication: M
   if (!stockUnit) errors.push('Stock unit is required');
   if (!saleUnit) errors.push('Smallest/sale unit is required');
   if (canSellIndividually && validPackSize <= 1) errors.push('Subunit tracking requires a pack/container size greater than 1');
-  if (canSellIndividually && (!Number.isFinite(unitPrice) || unitPrice < 0)) errors.push('Smallest-unit price is required when subunit tracking is enabled');
+  if (canSellIndividually && (!Number.isFinite(unitPrice) || (unitPrice ?? -1) < 0)) errors.push('Smallest-unit price is required when subunit tracking is enabled');
 
   const quantity = Math.floor(Number.isFinite(stock) ? stock : 0);
   let resultingStock = existing?.stock ?? 0;

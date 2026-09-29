@@ -1130,7 +1130,10 @@ export default function App() {
 
   // System Data Reset Handler (Admin Only) - wipes stock, sales & activity while strictly preserving shop details & accounts
   const handleResetSystemData = async () => {
-    if (currentUser.role !== 'admin') {
+    // This wipes stock, sales and activity, so the authorisation check must not
+    // depend on `currentUser` already being non-null: reading `.role` off null
+    // would throw before the guard could deny the request.
+    if (!currentUser || currentUser.role !== 'admin') {
       showToast('Unauthorized: Only administrators can reset system data.', 'error');
       return;
     }

@@ -17,16 +17,12 @@ import { getSupabase } from './supabase';
 /**
  * Outcome of pushing one sale to the authoritative server RPC.
  *
- * Deliberately a single interface rather than a discriminated union: this
- * project compiles with `strict` disabled, under which narrowing on an `ok`
- * discriminant does not reliably apply at the call sites.
+ * `permanent` distinguishes a sale the server *refused* -- which will never
+ * succeed on retry -- from one it never reached a decision on.
  */
-export interface SaleSyncResult {
-  ok: boolean;
-  /** True when the server refused the sale and a retry can never succeed. */
-  permanent?: boolean;
-  message?: string;
-}
+export type SaleSyncResult =
+  | { ok: true }
+  | { ok: false; permanent: boolean; message: string };
 
 const STORAGE_KEYS = {
   MEDICATIONS: 'pharmapos_medications_v1',

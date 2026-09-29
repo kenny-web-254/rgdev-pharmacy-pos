@@ -622,9 +622,9 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
     try {
       const activeUser = storageService.getActiveUser();
       storageService.addAuditLog({
-        userId: activeUser.id,
-        userName: activeUser.name,
-        userRole: activeUser.role,
+        userId: activeUser?.id ?? '',
+        userName: activeUser?.name ?? 'Unknown',
+        userRole: activeUser?.role ?? 'cashier',
         action: 'INVENTORY_EXPORT_CSV',
         details: `Exported ${exportItems.length} product records to CSV for external audit/backup (${fileName})`,
         category: 'INVENTORY',

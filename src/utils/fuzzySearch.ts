@@ -4,7 +4,7 @@ export interface FuzzyMatchResult {
   medication: Medication;
   score: number;
   matchedFields: ('name' | 'genericName' | 'category' | 'barcode')[];
-  categoryMatch?: MedicationCategory;
+  categoryMatch?: MedicationCategory | string;
   isFuzzyTypo?: boolean;
 }
 
@@ -192,7 +192,7 @@ export function scoreMedicationMatch(
   let totalScore = 0;
   const matchedFields = new Set<'name' | 'genericName' | 'category' | 'barcode'>();
   let hasTypo = false;
-  let categoryMatched: MedicationCategory | undefined = undefined;
+  let categoryMatched: MedicationCategory | string | undefined = undefined;
 
   // Direct fast paths for entire query
   // Exact barcode match (high priority for scanning)

@@ -105,7 +105,6 @@ export function directPrintReceipt(
             ${settings.addressLine2 ? `<div class="meta">${settings.addressLine2}</div>` : ''}
             <div class="meta">Tel: ${settings.phone}</div>
             ${settings.licenseNumber ? `<div class="meta">${settings.licenseNumber}</div>` : ''}
-            ${settings.taxId ? `<div class="meta">${settings.taxId}</div>` : ''}
             ${settings.headerMessage ? `<div class="meta" style="margin-top: 3px; font-weight: 600;">${settings.headerMessage}</div>` : ''}
           </div>
 
@@ -176,14 +175,6 @@ export function directPrintReceipt(
             <span>Subtotal:</span>
             <span>${formatKSh(transaction.subtotal)}</span>
           </div>
-          ${
-            settings.showTaxBreakdown && transaction.tax > 0
-              ? `<div class="row meta">
-                  <span>Tax (Included):</span>
-                  <span>${formatKSh(transaction.tax)}</span>
-                </div>`
-              : ''
-          }
           ${
             transaction.discount > 0
               ? `<div class="row meta" style="color: #059669;">

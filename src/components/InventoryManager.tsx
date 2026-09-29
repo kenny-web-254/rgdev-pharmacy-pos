@@ -13,6 +13,7 @@ import {
   Download,
   Edit2,
   Filter,
+  FileSpreadsheet,
   PackagePlus,
   Pill,
   Plus,
@@ -29,6 +30,7 @@ import {
 import { ExpiryFilterPreset, InventoryFilters, Medication, MedicationCategory, UserRole } from '../types';
 import { formatKSh } from '../utils/currency';
 import { storageService } from '../services/storage';
+import { InventoryExcelImport } from './InventoryExcelImport';
 
 interface InventoryManagerProps {
   medications: Medication[];
@@ -151,6 +153,7 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
   const [restockReason, setRestockReason] = useState<string>('Stock intake / Supplier delivery');
   const [restockError, setRestockError] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isExcelImportOpen, setIsExcelImportOpen] = useState(false);
   const [addFormError, setAddFormError] = useState<string | null>(null);
   const [editFormError, setEditFormError] = useState<string | null>(null);
   const [exportSuccessMessage, setExportSuccessMessage] = useState<string | null>(null);
@@ -674,7 +677,27 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
         </div>
       )}
 
+      {isExcelImportOpen && isAdmin && (
+        <InventoryExcelImport
+          medications={medications}
+          onAddMedication={onAddMedication}
+          onUpdateMedication={onUpdateMedication}
+          onClose={() => setIsExcelImportOpen(false)}
+        />
+      )}
+
       {/* Header controls */}
+      {isAdmin && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => setIsExcelImportOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-semibold hover:bg-emerald-100 transition"
+          >
+            Import Excel Inventory
+          </button>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
         <div>
           <h1 className="text-lg font-bold text-slate-900 flex items-center gap-2">
@@ -710,6 +733,15 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
                 )}
               </button>
 
+              <button
+                id="import-inventory-excel-btn"
+                type="button"
+                onClick={() => setIsExcelImportOpen(true)}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-xs transition active:scale-95 cursor-pointer"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                Import Stock Spreadsheet
+              </button>
               <button
                 id="add-medication-btn"
                 onClick={() => setIsAddModalOpen(true)}

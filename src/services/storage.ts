@@ -14,6 +14,20 @@ import {
 import { INITIAL_RECEIPT_SETTINGS } from '../data/defaultReceiptSettings';
 import { getSupabase } from './supabase';
 
+/**
+ * Outcome of pushing one sale to the authoritative server RPC.
+ *
+ * Deliberately a single interface rather than a discriminated union: this
+ * project compiles with `strict` disabled, under which narrowing on an `ok`
+ * discriminant does not reliably apply at the call sites.
+ */
+export interface SaleSyncResult {
+  ok: boolean;
+  /** True when the server refused the sale and a retry can never succeed. */
+  permanent?: boolean;
+  message?: string;
+}
+
 const STORAGE_KEYS = {
   MEDICATIONS: 'pharmapos_medications_v1',
   PRESCRIPTIONS: 'pharmapos_prescriptions_v1',
@@ -629,9 +643,11 @@ export const storageService = {
     }
   },
 
-  async pushTransactionToCloud(t: SaleTransaction): Promise<boolean> {
+  async pushTransactionToCloud(t: SaleTransaction): Promise<SaleSyncResult> {
     const client = getSupabase();
-    if (!client) return false;
+    if (!client) {
+      return { ok: false, permanent: false, message: 'The database is not configured.' };
+    }
     try {
       const { data, error } = await client.rpc('complete_sale', {
         p_transaction: transactionToRow(t),
@@ -639,15 +655,52 @@ export const storageService = {
       if (error || !data?.ok) {
         const detail = error?.message || (data ? JSON.stringify(data) : 'No response from complete_sale RPC');
         console.error('Atomic sale synchronization failed:', detail);
-        return false;
+        return {
+          ok: false,
+          permanent: isPermanentSaleRejection(error),
+          message: detail,
+        };
       }
-      return true;
+      return { ok: true };
     } catch (e) {
-      console.error('Atomic sale synchronization failed:', e instanceof Error ? e.message : String(e));
-      return false;
+      // A thrown error is a transport failure (offline, DNS, TLS). The server
+      // never reached a decision, so the sale is still worth retrying.
+      const message = e instanceof Error ? e.message : String(e);
+      console.error('Atomic sale synchronization failed:', message);
+      return { ok: false, permanent: false, message };
     }
   },
 };
+
+/**
+ * Distinguishes a sale the server has *refused* from one it never decided on.
+ *
+ * A refusal will never succeed on retry -- the stock is gone, the price moved,
+ * the batch expired -- so requeuing it forever hides a sale that needs a human.
+ * A transport failure, by contrast, must be retried or the sale is lost.
+ */
+function isPermanentSaleRejection(error: { code?: string; message?: string } | null): boolean {
+  if (!error) {
+    // `data.ok` was falsy without an error: the function ran and declined.
+    return true;
+  }
+  // PostgreSQL raise_exception, i.e. one of complete_sale's own guards.
+  if (error.code === 'P0001') return true;
+  const message = (error.message || '').toLowerCase();
+  if (!message) return false;
+  return [
+    'sale rejected',
+    'cannot sell',
+    'insufficient',
+    'does not exist',
+    'not found',
+    'has expired',
+    'is expired',
+    'exceeds',
+    'unsupported payment',
+    'required',
+  ].some((phrase) => message.includes(phrase));
+}
 
 // ------------------------------------------------------------------
 // camelCase (app) <-> snake_case (Supabase) row mappers

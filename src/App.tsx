@@ -432,55 +432,76 @@ export default function App() {
     // fall back to just clearing local "offline" flags so the UI queue
     // doesn't grow unbounded while running in local-only/demo mode.
     if (!supabaseConfig.isConfigured()) {
-      const count = offlineQueue.length;
-      const localOnlySynced = transactions.map((tx) =>
-        tx.isOffline ? { ...tx, isOffline: false, synced: false } : tx
-      );
-      setTransactions(localOnlySynced);
-      storageService.saveTransactions(localOnlySynced);
-      setOfflineQueue([]);
-      storageService.clearOfflineQueue();
+      // The queue is deliberately left intact. Clearing it here previously
+      // discarded completed sales while telling the operator they had not
+      // been synchronized.
       showToast(
-        `Cannot synchronize offline transactions because the database is not configured.`,
-        'info'
+        `${offlineQueue.length} offline sale${offlineQueue.length > 1 ? 's are' : ' is'} still waiting: the database is not configured. They are kept locally and will sync once it is.`,
+        'warning'
       );
       return;
     }
 
-    const count = offlineQueue.length;
-
     (async () => {
-      const results = await Promise.all(offlineQueue.map((tx) => storageService.pushTransactionToCloud(tx)));
-      const succeededIds = new Set(offlineQueue.filter((_, i) => results[i]).map((tx) => tx.id));
-      const failedCount = count - succeededIds.size;
+      const succeededIds = new Set<string>();
+      const rejected: { tx: SaleTransaction; message: string }[] = [];
+
+      // Sequential, not Promise.all: each sale takes row locks on the same
+      // medications, so firing them concurrently invites lock contention and
+      // makes the resulting order unpredictable.
+      for (const tx of offlineQueue) {
+        const result = await storageService.pushTransactionToCloud(tx);
+        if (result.ok) {
+          succeededIds.add(tx.id);
+        } else if (result.permanent) {
+          // The server refused this sale and always will. Retrying it forever
+          // would hide it; surface it instead so a human can resolve it.
+          rejected.push({ tx, message: result.message || 'rejected by the server' });
+        }
+        // Transient failures fall through and stay queued for the next attempt.
+      }
+
+      const settledIds = new Set([...succeededIds, ...rejected.map((r) => r.tx.id)]);
 
       const syncedTransactions = transactions.map((tx) => {
         if (tx.isOffline && succeededIds.has(tx.id)) {
-          return {
-            ...tx,
-            isOffline: false,
-            synced: true,
-            syncTimestamp: new Date().toISOString(),
-          };
+          return { ...tx, isOffline: false, synced: true, syncTimestamp: new Date().toISOString() };
         }
         return tx;
       });
-
       setTransactions(syncedTransactions);
       storageService.saveTransactions(syncedTransactions);
 
-      const remainingQueue = offlineQueue.filter((tx) => !succeededIds.has(tx.id));
+      const remainingQueue = offlineQueue.filter((tx) => !settledIds.has(tx.id));
       setOfflineQueue(remainingQueue);
       storageService.saveOfflineQueue(remainingQueue);
 
+      // A rejected offline sale already deducted local stock when it was rung
+      // up, so the cached figures are now wrong. Re-pull the authoritative
+      // stock rather than leaving the till showing a phantom deduction.
+      if (rejected.length > 0) {
+        const cloudMeds = await storageService.pullMedicationsFromCloud();
+        if (cloudMeds) {
+          setMedications(cloudMeds);
+          storageService.saveMedications(cloudMeds);
+        }
+        for (const { tx, message } of rejected) {
+          showToast(
+            `Offline sale ${tx.receiptNumber} was REJECTED by the server and has not been recorded: ${message}. Re-ring it if the customer was served.`,
+            'error'
+          );
+        }
+      }
+
       if (succeededIds.size > 0) {
+        const pending = remainingQueue.length;
         showToast(
-          `Synced ${succeededIds.size} offline transaction${succeededIds.size > 1 ? 's' : ''} to the server${
-            failedCount > 0 ? `, ${failedCount} still pending` : ''
+          `Synced ${succeededIds.size} offline sale${succeededIds.size > 1 ? 's' : ''}${
+            pending > 0 ? `, ${pending} still pending` : ''
           }.`,
-          failedCount > 0 ? 'warning' : 'success'
+          pending > 0 ? 'warning' : 'success'
         );
-      } else {
+      } else if (rejected.length === 0) {
         showToast('Unable to synchronize changes. Will retry when connectivity is restored.', 'warning');
       }
     })();
@@ -1039,9 +1060,9 @@ export default function App() {
     }
 
     const saved = await storageService.pushTransactionToCloud(transaction);
-    if (!saved) {
+    if (!saved.ok) {
       showToast(
-        `Sale ${transaction.receiptNumber} was NOT saved. No local stock deduction was applied. Retry the sale.`,
+        `Sale ${transaction.receiptNumber} was NOT saved${saved.message ? `: ${saved.message}` : ''}. No local stock deduction was applied. Retry the sale.`,
         'error'
       );
       return false;

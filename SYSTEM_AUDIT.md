@@ -128,6 +128,39 @@ disagree with its own total by a cent, and would now fail the §2.4 checks.
 - **Fixed in:** `src/utils/pricing.ts`, which rounds decimal text the way
   Postgres does, and rounds at every step. Covered by tests.
 
+### 2.6 The offline queue destroyed and duplicated work — *critical*
+
+Three defects in `handleSyncOfflineQueue`:
+
+- When Supabase was not configured, it **cleared the offline queue** while
+  displaying "Cannot synchronize offline transactions". Completed sales were
+  destroyed by the same code path that reported they had not been sent.
+- `pushTransactionToCloud` returned a bare boolean, so a transient network
+  failure and an outright refusal ("insufficient stock", "price has changed")
+  were indistinguishable. A refused sale was retried on every reconnect forever,
+  with no indication of which sale or why.
+- Offline sales deduct local stock when rung up. A refused sale's deduction was
+  never reverted, so cached stock stayed wrong indefinitely.
+
+- **Fixed in:** commit `46bb9a4`. Failures now report permanent vs transient;
+  refusals are surfaced per-receipt with the server's reason and authoritative
+  stock is re-pulled. Sales sync sequentially rather than via `Promise.all`,
+  which was taking row locks on the same medications concurrently.
+
+### 2.7 `strict` mode was disabled — *high*
+
+`tsconfig.json` did not enable `strict`, so **nothing in the codebase was
+checked for null or undefined.** This is a large part of why §2.2's defects
+survived review and CI.
+
+Enabling it produced nine errors, all genuine. The most serious: the admin
+**data-wipe** handler read `currentUser.role` before establishing a user was
+signed in, so its authorisation check could throw before it could deny. Also a
+validation that could never fire (`unitPrice < 0` on a possibly-undefined value)
+and two null dereferences reachable without an active session.
+
+- **Fixed in:** commit `997bee0`.
+
 ---
 
 ## 3. Other findings (not yet fixed)
@@ -137,7 +170,6 @@ disagree with its own total by a cent, and would now fail the §2.4 checks.
 | 3.1 | **No batch model.** `medications` has a single `batch_number`/`expiry_date` column pair, not a batch table. Multi-batch stock and FEFO are structurally impossible without a schema change. | High |
 | 3.2 | **No packaging hierarchy.** `pack_size`/`stock_unit`/`sale_unit` give one flat level. The brief's unlimited nesting is not implemented, and the POS prices every line from `medication.price` regardless — `saleAsPack` exists in the type but is never used in pricing. | High |
 | 3.3 | **No partial-payment model.** `sale_transactions` has no amount-paid or balance column, and `complete_sale` rejects any tender below the total. A sale is fully paid or it does not exist. | High |
-| 3.4 | **Offline queue can silently diverge.** Offline sales deduct local stock immediately and are re-validated on sync. If stock or price moved meanwhile, the server correctly rejects them — but the local deduction has already happened, so the cached stock is wrong until a refresh, and the operator may not notice the sale never landed. | High |
 | 3.5 | **No M-Pesa integration.** `mpesa_reference` is a free-text field a cashier types. There is no STK push, no callback handler, no reconciliation. Nothing verifies the customer actually paid. | High |
 | 3.6 | **Money stored as `NUMERIC(12,2)`, not integer minor units** — contrary to the brief. Acceptable in Postgres (`NUMERIC` is exact), but every JS path must round consistently; §2.5 is the first instance of that risk. | Medium |
 | 3.7 | **No line-item table.** `sale_transactions.items` is JSONB, so per-line batch allocation cannot be recorded or reported on. | Medium |
@@ -151,6 +183,7 @@ disagree with its own total by a cent, and would now fail the §2.4 checks.
 
 - `npm run lint` — passes (was 19 errors).
 - `npm test` — 24 tests pass. **The project previously had no tests at all.**
+- `strict` mode is now enabled and the tree compiles clean under it.
 - `npm run build` — completes; output `dist/`, 1.25 MB JS / 63 KB CSS.
 - Build reproducibility — two consecutive builds leave `src/` byte-identical.
 - `scripts/verify-production.mjs` — confirmed to fail on a deliberately

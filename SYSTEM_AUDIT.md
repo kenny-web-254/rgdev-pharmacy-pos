@@ -5,11 +5,11 @@
 **Audited commit:** `dd05bbb` (`main`, 25 Sep 2026)
 **Audit date:** 29 September 2026
 
-> **Read this first.** This audit was carried out with access to the source
-> repository only. No Mshaale Healthcare database, deployment, or M-Pesa
-> credential was reachable. Nothing in this document has been verified against
-> the live installation, and no production change has been made. Section 6 lists
-> precisely what still has to be checked by someone with that access.
+> **Read this first.** Sections 2.1 onwards were verified against the live
+> Mshaale Healthcare Supabase project and the live Vercel deployments on
+> 30 September 2026. **No production change has been made**: every database
+> query was read-only, and the migration has not been applied. M-Pesa and the
+> physical hardware remain unverified. Section 6 lists what is still outstanding.
 
 ---
 
@@ -38,27 +38,54 @@ not a case for redesigning it.
 
 ## 2. Why sales fail — root causes
 
-### 2.1 `private.audit()` is called but defined nowhere — *critical*
+### 2.1 ROOT CAUSE: every production build has failed since 20 September
 
-`private.complete_sale` ends with:
+**Verified against the live systems on 30 September 2026.**
 
-```sql
-perform private.audit('SALE_COMPLETED', 'Sale '||v_existing.receipt_number||' completed', 'SALES', ...);
-```
+Vercel shows **all twelve of the most recent deployments in state `ERROR`**,
+including the current production deployment of `main` at `dd05bbb`. No build has
+succeeded. The live site therefore serves a stale artifact, and no fix made
+since has ever reached the till.
 
-`private.audit(text,text,text,jsonb)` is called by **five** functions and
-**created by no migration in this repository**.
+The database confirms the same timeline:
 
-If it is missing from the target database, PostgreSQL raises
-`undefined_function` on that statement. Because it is the last step of a single
-transaction, the whole sale rolls back — after stock, prices, payment and
-prescription balances have all validated correctly. **Every sale fails, and
-stock is correctly left untouched, which is exactly the reported symptom.**
+| Evidence | Value |
+|---|---|
+| Last successful sale | **20 September 2026** (`REC-834955`, KES 7.00) |
+| Sales since | **none** |
+| `SALE_COMPLETED` audit entries | 1, dated 20 September |
+| Audit entries of any kind since | **none** |
+| Medications loaded | 193, all in stock, all priced, all expiring 2027-03-31 |
+| Staff accounts | 3, all correctly linked to `auth.users` and confirmed |
 
-- **Fixed in:** `supabase/migrations/20260929120000_fix_missing_audit_and_authoritative_pricing.sql`
-- **Still to confirm:** whether the function exists in Mshaale's database
-  (created by hand, out of band). Query in §6.1. The migration is idempotent
-  either way.
+The database is **healthy**: `private.complete_sale` exists and is sound,
+`private.audit` exists, every dependency (`prescription_items`,
+`inventory_movements`, `receipt_number_seq`) is present, and `authenticated`
+holds `EXECUTE` on the public RPCs. A sale from an authenticated admin session
+should succeed today.
+
+**So the sales failure is not a database fault. It is a delivery fault** — the
+source stopped compiling (§2.2), so every build failed, and the working code
+never shipped. Fixing the build (commit `7862421`) is what restores sales.
+
+#### Correction to an earlier hypothesis
+
+An earlier draft of this audit named a missing `private.audit()` as the probable
+root cause, on the grounds that no migration in the repository creates it. That
+was **wrong for this database**: it exists, created outside of migrations, with
+its fourth parameter named `p_meta`.
+
+Two consequences, both now handled:
+
+- The finding still holds for a **fresh installation** from migrations alone,
+  where the function would genuinely be absent and all five of its callers would
+  fail. The migration retains the definition for that case.
+- The migration as first written **would have failed on this database.**
+  PostgreSQL refuses to rename an input parameter through `CREATE OR REPLACE`,
+  so a definition using `p_metadata` would have aborted it. It now uses
+  `p_meta`, and is rebased on the live `complete_sale`, which is newer than the
+  repository's and whose `get diagnostics` assertion and `(select auth.uid())`
+  form are preserved.
 
 ### 2.2 The repository does not compile — *critical*
 

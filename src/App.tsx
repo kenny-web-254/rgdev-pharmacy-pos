@@ -329,7 +329,10 @@ export default function App() {
     if (!currentUser || !supabaseConfig.isConfigured()) return;
     let cancelled = false;
     (async () => {
-      const [cloudMeds, cloudRx, cloudTests, cloudSales, cloudReceiptSettings] = await Promise.all([
+      // allSettled, not all: one failing pull must not discard the others.
+      // Previously a single rejection meant nothing was applied at all, so the
+      // screen stayed empty even when the medications call had succeeded.
+      const settled = await Promise.allSettled([
         storageService.pullMedicationsFromCloud(),
         storageService.pullPrescriptionsFromCloud(),
         storageService.pullTestsFromCloud(),
@@ -337,6 +340,36 @@ export default function App() {
         pullReceiptSettingsFromSupabase(),
       ]);
       if (cancelled) return;
+
+      function settledValue(index: number): unknown {
+        const entry = settled[index];
+        return entry.status === 'fulfilled' ? entry.value ?? null : null;
+      }
+
+      const cloudMeds = settledValue(0) as Medication[] | null;
+      const cloudRx = settledValue(1) as Prescription[] | null;
+      const cloudTests = settledValue(2) as MedicalTest[] | null;
+      const cloudSales = settledValue(3) as SaleTransaction[] | null;
+      const cloudReceiptSettings = settledValue(4) as ReceiptSettings | null;
+
+      settled.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          console.error(`Cloud hydration failed for source ${i}`, r.reason);
+        }
+      });
+
+      // An empty catalogue is almost always a failed fetch rather than a real
+      // empty inventory, and silently showing nothing gives staff no way to tell
+      // the difference. Say so explicitly.
+      if (!cloudMeds) {
+        showToast(
+          'Could not load the medication catalogue from the database. Check the network connection on this device, then sign out and back in. Do not assume stock is zero.',
+          'error'
+        );
+      } else if (cloudMeds.length === 0) {
+        showToast('The database returned an empty medication catalogue.', 'warning');
+      }
+
       if (cloudMeds) {
         setMedications(cloudMeds);
         storageService.saveMedications(cloudMeds);

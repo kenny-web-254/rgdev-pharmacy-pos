@@ -51,6 +51,24 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          // Delete precaches from previous builds. Without this, a till can keep
+          // serving an old bundle after a deploy -- which is how a cashier hit
+          // `handleDispensePrescriptionToCart is not defined` from a build made
+          // before that function was restored.
+          cleanupOutdatedCaches: true,
+          // Never serve a stale app shell: the HTML must come from the network
+          // when it is reachable, so a new deploy is picked up on next load.
+          navigateFallback: 'index.html',
+          runtimeCaching: [
+            {
+              urlPattern: ({ request }) => request.mode === 'navigate',
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'app-shell',
+                networkTimeoutSeconds: 5,
+              },
+            },
+          ],
         },
       }),
     ],

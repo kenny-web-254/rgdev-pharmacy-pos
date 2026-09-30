@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Loader2, Upload, X } from 'lucide-react';
 import type { Medication, MedicationCategory } from '../types';
+import { getSupabase } from '../services/supabase';
 
 interface InventoryExcelImportProps {
   medications: Medication[];
@@ -39,15 +40,6 @@ function parseDate(value: unknown): string {
   return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
 
-function roundSellingPrice(costPrice: number): number {
-  // Protect against Nairobi transport/logistics costs and leave a practical
-  // gross margin. Cost is treated as purchase cost before shipment; 15% is
-  // reserved for logistics and the target gross margin is 25% after that.
-  const landedCost = costPrice * 1.15;
-  const protectedPrice = landedCost / 0.75;
-  return Math.max(10, Math.ceil(protectedPrice / 5) * 5);
-}
-
 function parseAction(row: ImportRow): ImportAction {
   const raw = text(row, 'Action (Add/Reduce/Replace)', 'Action', 'Stock Action').toLowerCase();
   if (raw.includes('reduce') || raw.includes('subtract') || raw.includes('remove')) return 'REDUCE';
@@ -67,16 +59,25 @@ function buildMedication(row: ImportRow, existing?: Medication): { medication: M
   const expiryKey = Object.keys(row).find((k) => ['expirydate', 'expirationdate', 'expiry', 'expiration', 'expirydateyyyymmdd'].includes(normalizeHeader(k)));
   const expiryDate = parseDate(expiryKey ? row[expiryKey] : '') || existing?.expiryDate || '';
   const manufacturer = text(row, 'Manufacturer / Supplier', 'Manufacturer', 'Supplier') || existing?.manufacturer || '';
-  const rawPrice = numberValue(row, 'Selling Price (KSh)', 'Selling Price', 'Price', 'Unit Selling Price', 'Unit Selling Price (KSh)');
-  const costPrice = numberValue(row, 'Cost Price (KSh)', 'Cost Price', 'Unit Cost', 'Unit Cost (KSh)');
+  const rawPrice = numberValue(row, 'Selling Price (KSh)', 'Selling Price', 'Price', 'Stock Unit Price (KSh)', 'Stock Unit Price') ;
+  const costPrice = numberValue(row, 'Cost Price (KSh)', 'Cost Price', 'Stock Unit Cost (KSh)', 'Stock Unit Cost');
+  const packSize = numberValue(row, 'Pack / Container Size', 'Pack Size', 'Units Per Pack', 'Units Per Container');
+  const stockUnit = text(row, 'Stock Unit', 'Inventory Unit', 'Purchase Unit') || existing?.stockUnit || 'Unit';
+  const saleUnit = text(row, 'Smallest Unit', 'Sale Unit', 'Base Unit') || existing?.saleUnit || stockUnit;
+  const subunitTracking = text(row, 'Subunit Tracking Enabled (Yes/No)', 'Can Sell Individually (Yes/No)', 'Can Sell Individually').toLowerCase();
+  const canSellIndividually = subunitTracking ? ['yes', 'true', '1'].includes(subunitTracking) : (existing?.canSellIndividually ?? false);
+  const rawUnitPrice = numberValue(row, 'Smallest Unit Price (KSh)', 'Unit Price (KSh)', 'Unit Price');
+  const rawUnitCost = numberValue(row, 'Smallest Unit Cost (KSh)', 'Unit Cost (KSh)', 'Unit Cost');
   const stock = numberValue(row, 'Quantity', 'Stock', 'Current Stock Level');
   const minStockLevel = numberValue(row, 'Min Stock Alert Level', 'Min Stock', 'Min Stock Level', 'Min Reorder Level');
   const rx = text(row, 'Prescription Required (Yes/No)', 'Prescription Required', 'Rx Required').toLowerCase();
   const coldChain = text(row, 'Requires Cold Chain (Yes/No)', 'Requires Cold Chain', 'Cold Chain').toLowerCase();
   const stockAction = parseAction(row);
   const validCost = Number.isFinite(costPrice) ? costPrice : (existing?.costPrice ?? NaN);
-  const generatedPrice = Number.isFinite(validCost) && validCost > 0 ? roundSellingPrice(validCost) : 0;
-  const price = Number.isFinite(rawPrice) && rawPrice > 0 ? Math.ceil(rawPrice) : (generatedPrice || existing?.price || 0);
+  const price = Number.isFinite(rawPrice) && rawPrice > 0 ? Math.ceil(rawPrice) : (existing?.price ?? 0);
+  const validPackSize = Number.isFinite(packSize) && packSize > 0 ? packSize : (existing?.packSize ?? 1);
+  const unitPrice = Number.isFinite(rawUnitPrice) && rawUnitPrice >= 0 ? rawUnitPrice : (existing?.unitPrice ?? (price > 0 ? price / validPackSize : undefined));
+  const unitCost = Number.isFinite(rawUnitCost) && rawUnitCost >= 0 ? rawUnitCost : (existing?.unitCost ?? (Number.isFinite(validCost) ? validCost / validPackSize : undefined));
   const isPrescriptionRequired = rx ? !['no', 'false', '0', 'otc'].includes(rx) : (existing?.isPrescriptionRequired ?? false);
   const requiresRefrigeration = coldChain ? ['yes', 'true', '1', 'required'].includes(coldChain) : (existing?.requiresRefrigeration ?? false);
 
@@ -86,10 +87,15 @@ function buildMedication(row: ImportRow, existing?: Medication): { medication: M
   if (!barcode) errors.push('Barcode is required');
   if (!batchNumber) errors.push('Batch/lot number is required');
   if (!expiryDate) errors.push('Valid expiry date is required');
-  if (price <= 0) errors.push('Selling price could not be determined');
+  if (price <= 0) errors.push('Selling price must be supplied explicitly');
   if (!Number.isFinite(validCost) || validCost < 0) errors.push('Cost price must be 0 or greater');
   if (!Number.isFinite(stock) || stock < 0) errors.push('Quantity/stock cannot be negative');
   if (!Number.isFinite(minStockLevel) || minStockLevel < 0) errors.push('Minimum stock cannot be negative');
+  if (!Number.isFinite(validPackSize) || validPackSize <= 0) errors.push('Pack/container size must be greater than zero');
+  if (!stockUnit) errors.push('Stock unit is required');
+  if (!saleUnit) errors.push('Smallest/sale unit is required');
+  if (canSellIndividually && validPackSize <= 1) errors.push('Subunit tracking requires a pack/container size greater than 1');
+  if (canSellIndividually && (!Number.isFinite(unitPrice) || (unitPrice ?? -1) < 0)) errors.push('Smallest-unit price is required when subunit tracking is enabled');
 
   const quantity = Math.floor(Number.isFinite(stock) ? stock : 0);
   let resultingStock = existing?.stock ?? 0;
@@ -122,6 +128,12 @@ function buildMedication(row: ImportRow, existing?: Medication): { medication: M
     expiryDate,
     manufacturer: manufacturer || existing?.manufacturer || '',
     requiresRefrigeration,
+    packSize: validPackSize,
+    stockUnit,
+    saleUnit,
+    canSellIndividually,
+    unitPrice,
+    unitCost,
   };
   return { medication, errors, stockAction };
 }
@@ -142,10 +154,12 @@ export const InventoryExcelImport: React.FC<InventoryExcelImportProps> = ({ medi
       const XLSX = await loadXlsx();
       const ws = XLSX.utils.aoa_to_sheet([[
         'Product Name', 'Generic Name', 'Category', 'Dosage Form', 'Strength / Dosage',
-        'Selling Price (KSh)', 'Cost Price (KSh)', 'Quantity', 'Action (Add/Reduce/Replace)',
-        'Min Stock Alert Level', 'Batch / Lot Number', 'Expiry Date (YYYY-MM-DD)',
-        'Manufacturer / Supplier', 'Barcode / NDC', 'Prescription Required (Yes/No)',
-        'Requires Cold Chain (Yes/No)'
+        'Barcode / SKU', 'Stock Unit', 'Smallest Unit', 'Pack / Container Size',
+        'Subunit Tracking Enabled (Yes/No)', 'Selling Price (KSh)', 'Cost Price (KSh)',
+        'Smallest Unit Price (KSh)', 'Smallest Unit Cost (KSh)', 'Quantity',
+        'Action (Add/Reduce/Replace)', 'Min Stock Alert Level', 'Batch / Lot Number',
+        'Expiry Date (YYYY-MM-DD)', 'Manufacturer / Supplier',
+        'Prescription Required (Yes/No)', 'Requires Cold Chain (Yes/No)'
       ]]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Inventory Import Template');
@@ -165,7 +179,7 @@ export const InventoryExcelImport: React.FC<InventoryExcelImportProps> = ({ medi
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true, dense: false });
       const firstSheet = workbook.SheetNames[0];
       if (!firstSheet) throw new Error('The workbook has no worksheets.');
-      const rows = XLSX.utils.sheet_to_json<ImportRow>(workbook.Sheets[firstSheet], { defval: '' });
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { defval: '' }) as ImportRow[];
       if (!rows.length) throw new Error('The first worksheet contains no inventory rows.');
       if (rows.length > 2000) throw new Error('Maximum 2,000 inventory rows per import. Split larger files into batches.');
       const seen = new Set<string>();
@@ -185,30 +199,71 @@ export const InventoryExcelImport: React.FC<InventoryExcelImportProps> = ({ medi
     } finally { setBusy(false); }
   };
 
-  const commit = () => {
+  const commit = async () => {
     if (!validRows.length) return;
+    if (!getSupabase()) {
+      setError('Supabase is not configured. Inventory import was not saved.');
+      return;
+    }
+
     setBusy(true);
+    setError('');
     try {
-      let created = 0, updated = 0;
+      const rows = validRows.map(({ medication }) => ({
+        id: medication.id,
+        name: medication.name,
+        genericName: medication.genericName,
+        dosage: medication.dosage,
+        form: medication.form,
+        category: medication.category,
+        isPrescriptionRequired: medication.isPrescriptionRequired,
+        barcode: medication.barcode,
+        price: medication.price,
+        costPrice: medication.costPrice,
+        quantity: medication.stock,
+        stockAction: 'REPLACE',
+        minStockLevel: medication.minStockLevel,
+        batchNumber: medication.batchNumber,
+        expiryDate: medication.expiryDate,
+        manufacturer: medication.manufacturer,
+        requiresRefrigeration: medication.requiresRefrigeration,
+        packSize: medication.packSize ?? 1,
+        stockUnit: medication.stockUnit ?? 'Unit',
+        saleUnit: medication.saleUnit ?? medication.stockUnit ?? 'Unit',
+        canSellIndividually: medication.canSellIndividually ?? false,
+        unitPrice: medication.unitPrice ?? null,
+        unitCost: medication.unitCost ?? null,
+      }));
+
+      const { data, error: rpcError } = await getSupabase()!.rpc('import_inventory', { p_rows: rows });
+      if (rpcError) throw rpcError;
+      if (!data?.ok) throw new Error('Supabase did not confirm the inventory import.');
+
+      // Only update the local UI/cache after the server transaction succeeds.
       validRows.forEach(({ medication, action }) => {
-        if (action === 'CREATE') { onAddMedication(medication); created++; }
-        else { onUpdateMedication(medication); updated++; }
+        if (action === 'CREATE') onAddMedication(medication);
+        else onUpdateMedication(medication);
       });
-      setDone({ created, updated, skipped: preview.length - validRows.length });
+
+      setDone({ created: Number(data.created ?? 0), updated: Number(data.updated ?? 0), skipped: preview.length - validRows.length });
       setPreview([]);
-    } finally { setBusy(false); }
+    } catch (e) {
+      setError(`Inventory import was not saved. No local success state was applied. ${e instanceof Error ? e.message : 'Unknown server error.'}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return <div className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
     <div className="w-full max-w-6xl max-h-[90vh] overflow-hidden rounded-2xl bg-white shadow-2xl border border-slate-200 flex flex-col">
-      <div className="p-5 border-b flex items-center justify-between gap-4"><div><h2 className="text-lg font-bold text-slate-900 flex items-center gap-2"><FileSpreadsheet className="w-5 h-5" /> Import Inventory from Excel</h2><p className="text-xs text-slate-500 mt-1">Preview first. Missing selling prices are generated safely from cost; nothing is saved until you confirm.</p></div><button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100" aria-label="Close"><X className="w-5 h-5" /></button></div>
+      <div className="p-5 border-b flex items-center justify-between gap-4"><div><h2 className="text-lg font-bold text-slate-900 flex items-center gap-2"><FileSpreadsheet className="w-5 h-5" /> Import Inventory from Excel</h2><p className="text-xs text-slate-500 mt-1">Preview first. Prices and costs are taken from the spreadsheet; missing required values are rejected. Nothing is saved until you confirm.</p></div><button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100" aria-label="Close"><X className="w-5 h-5" /></button></div>
       <div className="p-5 overflow-auto space-y-4">
         <div className="flex flex-wrap gap-2"><button onClick={downloadTemplate} disabled={busy} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50"><Download className="w-4 h-4" /> Download Excel Template</button><button onClick={() => inputRef.current?.click()} disabled={busy} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 disabled:opacity-50"><Upload className="w-4 h-4" /> Choose Excel File</button><input ref={inputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />{fileName && <span className="text-xs text-slate-500 self-center">{fileName}</span>}</div>
         {error && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-800 flex gap-2"><AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />{error}</div>}
         {busy && <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-sm text-slate-600 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Processing spreadsheet…</div>}
         {done && <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-800 flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> Import complete: {done.created} created, {done.updated} updated, {done.skipped} skipped.</div>}
         {preview.length > 0 && <div className="border rounded-xl overflow-auto"><div className="p-3 bg-slate-50 border-b text-xs font-semibold">Preview: {preview.length} rows • {validRows.length} ready • {preview.length - validRows.length} with errors</div><table className="min-w-full text-xs"><thead><tr className="border-b"><th className="p-2 text-left">Row</th><th className="p-2 text-left">Action</th><th className="p-2 text-left">Medicine</th><th className="p-2 text-left">Barcode</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">Sell Price</th><th className="p-2 text-left">Batch</th><th className="p-2 text-left">Expiry</th><th className="p-2 text-left">Validation</th></tr></thead><tbody>{preview.map((r) => <tr key={r.rowNumber} className="border-b"><td className="p-2">{r.rowNumber}</td><td className="p-2 font-semibold">{r.action}<div className="font-normal text-slate-500">{r.stockAction}</div></td><td className="p-2">{r.medication.name}</td><td className="p-2 font-mono">{r.medication.barcode}</td><td className="p-2 text-right">{r.medication.stock}</td><td className="p-2 text-right">KSh {Math.round(r.medication.price)}</td><td className="p-2">{r.medication.batchNumber}</td><td className="p-2">{r.medication.expiryDate}</td><td className="p-2">{r.errors.length ? <span className="text-red-700">{r.errors.join('; ')}</span> : <span className="text-emerald-700">OK</span>}</td></tr>)}</tbody></table></div>}
-        <div className="text-xs text-slate-500">Matching uses barcode. ADD increases existing stock, REDUCE decreases it without allowing negative stock, and REPLACE sets the stock to the spreadsheet quantity. Selling prices are whole KSh and are never allowed below the protected cost calculation. Admin-only. Maximum 2,000 rows and 10 MB per import.</div>
+        <div className="text-xs text-slate-500">Matching uses barcode. ADD increases existing stock, REDUCE decreases it without allowing negative stock, and REPLACE sets the stock to the spreadsheet quantity. Prices and costs are explicit item data. Unit relationships are validated before import. Admin-only. Maximum 2,000 rows and 10 MB per import.</div>
       </div>
       <div className="p-4 border-t bg-slate-50 flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-xl border bg-white text-sm font-semibold">Close</button><button onClick={commit} disabled={busy || validRows.length === 0} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50">Import {validRows.length} Valid Rows</button></div>
     </div>

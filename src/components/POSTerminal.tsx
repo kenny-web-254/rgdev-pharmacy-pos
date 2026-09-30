@@ -39,6 +39,7 @@ import {
 } from '../types';
 import { playScanSuccessBeep } from '../utils/audio';
 import { formatKSh } from '../utils/currency';
+import { cartDiscountAmount, cartSubtotal, cartTotal, lineTotal } from '../utils/pricing';
 import { storageService } from '../services/storage';
 import { fuzzySearchMedications, findBestQuickAddMatch } from '../utils/fuzzySearch';
 
@@ -429,15 +430,18 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
     quickAddInputRef.current?.focus();
   };
 
-  // Financial calculations in Kenyan Shillings
-  const subtotal = cart.reduce((acc, item) => {
-    const basePrice = item.medication.price * item.quantity;
-    const discount = item.discountPercent ? (basePrice * item.discountPercent) / 100 : 0;
-    return acc + (basePrice - discount);
-  }, 0);
+  // Financial calculations in Kenyan Shillings. These helpers mirror the
+  // arithmetic in private.complete_sale, which recomputes and re-verifies every
+  // figure server-side before a sale is stored.
+  const pricedLines = cart.map((item) => ({
+    unitPrice: item.medication.price,
+    quantity: item.quantity,
+    discountPercent: item.discountPercent,
+  }));
 
-  const cartDiscount = (subtotal * discountPercent) / 100;
-  const total = Math.round(Math.max(0, subtotal - cartDiscount) * 100) / 100;
+  const subtotal = cartSubtotal(pricedLines);
+  const cartDiscount = cartDiscountAmount(subtotal, discountPercent);
+  const total = cartTotal(subtotal, cartDiscount);
 
   // Change calculations depending on payment method
   let changeDue = 0;
@@ -523,7 +527,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           patientName: it.patientName || patientNameInput,
           quantity: it.quantity,
           unitPrice: it.medication.price,
-          totalPrice: it.medication.price * it.quantity * (1 - (it.discountPercent || 0) / 100),
+          totalPrice: lineTotal({ unitPrice: it.medication.price, quantity: it.quantity, discountPercent: it.discountPercent }),
           batchNumber: it.medication.batchNumber || 'N/A',
           expiryDate: it.medication.expiryDate || 'N/A',
         })),
@@ -664,7 +668,7 @@ export const POSTerminal: React.FC<POSTerminalProps> = ({
           patientName: it.patientName || patientNameInput,
           quantity: it.quantity,
           unitPrice: it.medication.price,
-          totalPrice: it.medication.price * it.quantity * (1 - (it.discountPercent || 0) / 100),
+          totalPrice: lineTotal({ unitPrice: it.medication.price, quantity: it.quantity, discountPercent: it.discountPercent }),
           batchNumber: it.medication.batchNumber || 'N/A',
           expiryDate: it.medication.expiryDate || 'N/A',
         })),

@@ -249,7 +249,7 @@ export const PrescriptionsManager: React.FC<PrescriptionsManagerProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {filteredPrescriptions.map((rx) => {
           const med = medications.find((m) => m.id === rx.medicationId);
-          const hasStock = med ? med.stock >= rx.quantityPrescribed : false;
+          const hasStock = med ? med.stock >= (rx.quantityPrescribed ?? 0) : false;
           const isDispensable =
             rx.status === 'ISSUED' || rx.status === 'PARTIALLY_DISPENSED';
 

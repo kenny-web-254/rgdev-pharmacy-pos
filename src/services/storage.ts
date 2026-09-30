@@ -11,16 +11,18 @@ import {
   User,
   UserRole,
 } from '../types';
-import {
-  DEMO_USERS,
-  INITIAL_AUDIT_LOGS,
-  INITIAL_MEDICATIONS,
-  INITIAL_PRESCRIPTIONS,
-  INITIAL_RECEIPT_SETTINGS,
-  INITIAL_TESTS,
-  INITIAL_TRANSACTIONS,
-} from '../data/mockData';
+import { INITIAL_RECEIPT_SETTINGS } from '../data/defaultReceiptSettings';
 import { getSupabase } from './supabase';
+
+/**
+ * Outcome of pushing one sale to the authoritative server RPC.
+ *
+ * `permanent` distinguishes a sale the server *refused* -- which will never
+ * succeed on retry -- from one it never reached a decision on.
+ */
+export type SaleSyncResult =
+  | { ok: true }
+  | { ok: false; permanent: boolean; message: string };
 
 const STORAGE_KEYS = {
   MEDICATIONS: 'pharmapos_medications_v1',
@@ -200,12 +202,14 @@ export const storageService = {
   getMedications(): Medication[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.MEDICATIONS);
-      if (data !== null) return JSON.parse(data);
+      if (data !== null) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) return parsed;
+      }
     } catch (e) {
-      console.error('Failed to load medications from storage', e);
+      console.error('Failed to load cached medications', e);
     }
-    this.saveMedications(INITIAL_MEDICATIONS);
-    return INITIAL_MEDICATIONS;
+    return [];
   },
 
   saveMedications(medications: Medication[]): void {
@@ -232,12 +236,14 @@ export const storageService = {
   getPrescriptions(): Prescription[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.PRESCRIPTIONS);
-      if (data !== null) return JSON.parse(data);
+      if (data !== null) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) return parsed;
+      }
     } catch (e) {
-      console.error('Failed to load prescriptions from storage', e);
+      console.error('Failed to load cached prescriptions', e);
     }
-    this.savePrescriptions(INITIAL_PRESCRIPTIONS);
-    return INITIAL_PRESCRIPTIONS;
+    return [];
   },
 
   savePrescriptions(prescriptions: Prescription[]): void {
@@ -252,12 +258,14 @@ export const storageService = {
   getTests(): MedicalTest[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.TESTS);
-      if (data !== null) return JSON.parse(data);
+      if (data !== null) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) return parsed;
+      }
     } catch (e) {
-      console.error('Failed to load tests from storage', e);
+      console.error('Failed to load cached tests', e);
     }
-    this.saveTests(INITIAL_TESTS);
-    return INITIAL_TESTS;
+    return [];
   },
 
   saveTests(tests: MedicalTest[]): void {
@@ -277,10 +285,9 @@ export const storageService = {
         if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
-      console.error('Failed to load transactions from storage', e);
+      console.error('Failed to load cached transactions', e);
     }
-    this.saveTransactions(INITIAL_TRANSACTIONS);
-    return INITIAL_TRANSACTIONS;
+    return [];
   },
 
   saveTransactions(transactions: SaleTransaction[]): void {
@@ -352,299 +359,25 @@ export const storageService = {
     }
   },
 
-  // Users & Staff Management
-  getUsers(): User[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.USERS);
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to load users from storage', e);
-    }
-    this.saveUsers(DEMO_USERS);
-    return DEMO_USERS;
+  // User identity and credentials are authoritative in Supabase Auth + pharmacy_users.
+  // These compatibility methods intentionally do not create or store users locally.
+  getUsers(): User[] { return []; },
+  saveUsers(_users: User[]): void {},
+  getUserById(_id: string): User | undefined { return undefined; },
+  createUser(): { success: boolean; error: string } {
+    return { success: false, error: 'Local user creation is disabled. Use Supabase Auth administrator provisioning.' };
   },
-
-  saveUsers(users: User[]): void {
-    try {
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-    } catch (e) {
-      console.error('Failed to save users', e);
-    }
+  updateUser(): { success: boolean; error: string } {
+    return { success: false, error: 'Local user updates are disabled. Use Supabase Auth administrator provisioning.' };
   },
-
-  getUserById(id: string): User | undefined {
-    return this.getUsers().find((u) => u.id === id);
+  toggleUserStatus(): { success: boolean; error: string } {
+    return { success: false, error: 'Local user status changes are disabled. Use Supabase Auth administrator provisioning.' };
   },
-
-  createUser(
-    actingUser: User,
-    userData: {
-      name: string;
-      username: string;
-      email?: string;
-      phone?: string;
-      role: UserRole;
-      password?: string;
-      licenseNumber?: string;
-    }
-  ): { success: boolean; user?: User; error?: string } {
-    if (actingUser.role !== 'admin') {
-      return { success: false, error: 'Unauthorized: Only administrators can create new staff accounts.' };
-    }
-
-    const currentUsers = this.getUsers();
-    const cleanUsername = userData.username.trim().toLowerCase();
-
-    if (!cleanUsername) {
-      return { success: false, error: 'Username cannot be blank.' };
-    }
-
-    if (currentUsers.some((u) => u.username.toLowerCase() === cleanUsername)) {
-      return { success: false, error: `Username "${userData.username}" is already taken.` };
-    }
-
-    const newUser: User = {
-      id: 'user-' + Date.now(),
-      username: cleanUsername,
-      name: userData.name.trim(),
-      email: userData.email?.trim() || `${cleanUsername}@afyacare.co.ke`,
-      phone: userData.phone?.trim() || '',
-      role: userData.role,
-      status: 'active',
-      password: userData.password || 'pharmacy123',
-      licenseNumber: userData.licenseNumber?.trim() || '',
-      avatarColor: userData.role === 'admin' ? 'bg-teal-700' : userData.role === 'clinician' ? 'bg-blue-600' : 'bg-emerald-600',
-      createdAt: new Date().toISOString(),
-    };
-
-    const updated = [newUser, ...currentUsers];
-    this.saveUsers(updated);
-
-    this.addAuditLog({
-      userId: actingUser.id,
-      userName: actingUser.name,
-      userRole: actingUser.role,
-      action: 'USER_CREATED',
-      details: `Created new ${newUser.role.toUpperCase()} account for ${newUser.name} (@${newUser.username})`,
-      category: 'USERS',
-    });
-
-    return { success: true, user: newUser };
+  deleteUser(): { success: boolean; error: string } {
+    return { success: false, error: 'Local user deletion is disabled. Use Supabase Auth administrator provisioning.' };
   },
-
-  updateUser(
-    actingUser: User,
-    targetUserId: string,
-    updates: Partial<User>
-  ): { success: boolean; user?: User; error?: string } {
-    const currentUsers = this.getUsers();
-    const target = currentUsers.find((u) => u.id === targetUserId);
-
-    if (!target) {
-      return { success: false, error: 'Target user account not found.' };
-    }
-
-    // Role-based security checks:
-    // 1. If acting user is staff: can only edit own profile, and can NEVER alter role, status, id, or permissions
-    if (actingUser.role !== 'admin') {
-      if (actingUser.id !== targetUserId) {
-        return { success: false, error: 'Unauthorized: Staff members cannot edit other user accounts.' };
-      }
-      // Strip forbidden keys
-      if (updates.role && updates.role !== target.role) {
-        return { success: false, error: 'Unauthorized: Staff members cannot modify account role.' };
-      }
-      if (updates.status && updates.status !== target.status) {
-        return { success: false, error: 'Unauthorized: Staff members cannot modify account status.' };
-      }
-    }
-
-    // 2. If acting user is admin:
-    if (actingUser.role === 'admin') {
-      // Admin cannot change their own role from ADMIN to STAFF
-      if (actingUser.id === targetUserId && updates.role && updates.role !== 'admin') {
-        return { success: false, error: 'Security restriction: Administrators cannot downgrade their own role.' };
-      }
-
-      // Check last remaining admin rule
-      if (
-        (updates.role && updates.role !== 'admin' && target.role === 'admin') ||
-        (updates.status === 'inactive' && target.role === 'admin')
-      ) {
-        const activeAdmins = currentUsers.filter((u) => u.role === 'admin' && u.status === 'active');
-        if (activeAdmins.length <= 1 && activeAdmins.some((u) => u.id === targetUserId)) {
-          return {
-            success: false,
-            error: 'Action prohibited: Cannot downgrade or deactivate the last remaining active Administrator.',
-          };
-        }
-      }
-    }
-
-    // Admin self-downgrade protection
-    if (actingUser.id === targetUserId && updates.role && updates.role !== 'admin' && target.role === 'admin') {
-      return { success: false, error: 'Security restriction: Administrators cannot downgrade their own role.' };
-    }
-
-    // Last admin protection
-    if (target.role === 'admin' && updates.role && updates.role !== 'admin') {
-      const activeAdmins = currentUsers.filter((u) => u.role === 'admin' && u.status === 'active');
-      if (activeAdmins.length <= 1) {
-        return {
-          success: false,
-          error: 'Security restriction: Cannot downgrade the last remaining active Administrator.',
-        };
-      }
-    }
-
-    // Safe updates whitelist
-    const updatedUser: User = {
-      ...target,
-      name: updates.name !== undefined ? updates.name.trim() : target.name,
-      email: updates.email !== undefined ? updates.email.trim() : target.email,
-      phone: updates.phone !== undefined ? updates.phone.trim() : target.phone,
-      licenseNumber: updates.licenseNumber !== undefined ? updates.licenseNumber.trim() : target.licenseNumber,
-      password: updates.password !== undefined ? updates.password : target.password,
-      // Admin-only fields
-      role: actingUser.role === 'admin' && updates.role ? updates.role : target.role,
-      status: actingUser.role === 'admin' && updates.status ? updates.status : target.status,
-    };
-
-    const updatedList = currentUsers.map((u) => (u.id === targetUserId ? updatedUser : u));
-    this.saveUsers(updatedList);
-
-    // If updating current active user, sync active user storage as well
-    const active = this.getActiveUser();
-    if (active.id === targetUserId) {
-      this.saveActiveUser(updatedUser);
-    }
-
-    this.addAuditLog({
-      userId: actingUser.id,
-      userName: actingUser.name,
-      userRole: actingUser.role,
-      action: 'USER_UPDATED',
-      details: `Updated account details for ${updatedUser.name} (@${updatedUser.username})`,
-      category: actingUser.id === targetUserId ? 'AUTH' : 'USERS',
-    });
-
-    return { success: true, user: updatedUser };
-  },
-
-  toggleUserStatus(actingUser: User, targetUserId: string): { success: boolean; user?: User; error?: string } {
-    if (actingUser.role !== 'admin') {
-      return { success: false, error: 'Unauthorized: Only administrators can modify account statuses.' };
-    }
-
-    if (actingUser.id === targetUserId) {
-      return { success: false, error: 'Security restriction: You cannot deactivate your own currently active account.' };
-    }
-
-    const currentUsers = this.getUsers();
-    const target = currentUsers.find((u) => u.id === targetUserId);
-    if (!target) return { success: false, error: 'User not found.' };
-
-    const newStatus = target.status === 'active' ? 'inactive' : 'active';
-
-    // Last admin check
-    if (newStatus === 'inactive' && target.role === 'admin') {
-      const activeAdmins = currentUsers.filter((u) => u.role === 'admin' && u.status === 'active');
-      if (activeAdmins.length <= 1) {
-        return {
-          success: false,
-          error: 'Security restriction: Cannot deactivate the last remaining active Administrator.',
-        };
-      }
-    }
-
-    const updatedUser: User = { ...target, status: newStatus };
-    const updatedList = currentUsers.map((u) => (u.id === targetUserId ? updatedUser : u));
-    this.saveUsers(updatedList);
-
-    this.addAuditLog({
-      userId: actingUser.id,
-      userName: actingUser.name,
-      userRole: actingUser.role,
-      action: newStatus === 'active' ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
-      details: `${newStatus === 'active' ? 'Activated' : 'Deactivated'} account of ${target.name} (@${target.username})`,
-      category: 'USERS',
-    });
-
-    return { success: true, user: updatedUser };
-  },
-
-  deleteUser(actingUser: User, targetUserId: string): { success: boolean; error?: string } {
-    if (actingUser.role !== 'admin') {
-      return { success: false, error: 'Unauthorized: Only administrators can delete staff accounts.' };
-    }
-
-    if (actingUser.id === targetUserId) {
-      return { success: false, error: 'Security restriction: Administrators cannot delete their own account.' };
-    }
-
-    const currentUsers = this.getUsers();
-    const target = currentUsers.find((u) => u.id === targetUserId);
-    if (!target) return { success: false, error: 'User not found.' };
-
-    if (target.role === 'admin') {
-      const adminCount = currentUsers.filter((u) => u.role === 'admin').length;
-      if (adminCount <= 1) {
-        return {
-          success: false,
-          error: 'Security restriction: Cannot delete the last remaining Administrator.',
-        };
-      }
-    }
-
-    const updatedList = currentUsers.filter((u) => u.id !== targetUserId);
-    this.saveUsers(updatedList);
-
-    this.addAuditLog({
-      userId: actingUser.id,
-      userName: actingUser.name,
-      userRole: actingUser.role,
-      action: 'USER_DELETED',
-      details: `Permanently removed ${target.role.toUpperCase()} account for ${target.name} (@${target.username})`,
-      category: 'USERS',
-    });
-
-    return { success: true };
-  },
-
-  resetUserPassword(actingUser: User, targetUserId: string, newPassword: string): { success: boolean; error?: string } {
-    if (actingUser.role !== 'admin' && actingUser.id !== targetUserId) {
-      return { success: false, error: 'Unauthorized: You can only change your own password.' };
-    }
-
-    if (!newPassword || newPassword.length < 4) {
-      return { success: false, error: 'Password must be at least 4 characters.' };
-    }
-
-    const currentUsers = this.getUsers();
-    const target = currentUsers.find((u) => u.id === targetUserId);
-    if (!target) return { success: false, error: 'User not found.' };
-
-    const updatedUser = { ...target, password: newPassword };
-    const updatedList = currentUsers.map((u) => (u.id === targetUserId ? updatedUser : u));
-    this.saveUsers(updatedList);
-
-    if (this.getActiveUser().id === targetUserId) {
-      this.saveActiveUser(updatedUser);
-    }
-
-    this.addAuditLog({
-      userId: actingUser.id,
-      userName: actingUser.name,
-      userRole: actingUser.role,
-      action: 'PASSWORD_RESET',
-      details: `Password reset performed for ${target.name} (@${target.username})`,
-      category: 'AUTH',
-    });
-
-    return { success: true };
+  resetUserPassword(): { success: boolean; error: string } {
+    return { success: false, error: 'Local password handling is disabled. Use Supabase Auth administrator provisioning.' };
   },
 
   // Audit Logs
@@ -656,10 +389,9 @@ export const storageService = {
         if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
-      console.error('Failed to load audit logs', e);
+      console.error('Failed to load cached audit logs', e);
     }
-    this.saveAuditLogs(INITIAL_AUDIT_LOGS);
-    return INITIAL_AUDIT_LOGS;
+    return [];
   },
 
   saveAuditLogs(logs: AuditLog[]): void {
@@ -688,44 +420,19 @@ export const storageService = {
   // (see `signInWithSupabase` / `signUpInitialAdmin` in services/supabase.ts).
   // Absence of a session here means "signed out" - full stop.
   getActiveUser(): User | null {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.ACTIVE_USER);
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (parsed && parsed.id) return parsed;
-      }
-    } catch (e) {
-      console.error('Failed to load active user', e);
-    }
+    // Supabase Auth is the session authority. This remains only as a compatibility shim.
     return null;
   },
 
-  saveActiveUser(user: User): void {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.LOGGED_OUT);
-      localStorage.setItem(STORAGE_KEYS.ACTIVE_USER, JSON.stringify(user));
-    } catch (e) {
-      console.error('Failed to save active user', e);
-    }
+  saveActiveUser(_user: User): void {
+    // Intentionally empty. Supabase Auth owns the browser session.
   },
 
-  logoutActiveUser(user?: User | null): void {
+  logoutActiveUser(_user?: User | null): void {
     try {
-      if (user) {
-        this.addAuditLog({
-          userId: user.id,
-          userName: user.name,
-          userRole: user.role,
-          action: 'USER_LOGOUT',
-          details: `User signed out of account session (@${user.username})`,
-          category: 'AUTH',
-        });
-      }
       localStorage.removeItem(STORAGE_KEYS.ACTIVE_USER);
-      localStorage.setItem(STORAGE_KEYS.LOGGED_OUT, 'true');
-    } catch (e) {
-      console.error('Failed to logout user', e);
-    }
+      localStorage.removeItem(STORAGE_KEYS.LOGGED_OUT);
+    } catch {}
   },
 
   // NOTE: The previous local, plaintext-password `authenticateUser()` method
@@ -736,6 +443,22 @@ export const storageService = {
   // use. Real credential checking now happens server-side via Supabase Auth.
 
   // Reset business data: deletes all stock, sales, prescriptions, and app activity logs while strictly preserving shop details (name, address, logo, receipt config) and user accounts
+  async resetBusinessDataFromCloud(): Promise<boolean> {
+    const client = getSupabase();
+    if (!client) return false;
+    try {
+      const { data, error } = await client.rpc('reset_business_data');
+      if (error || !data?.ok) {
+        console.error('Cloud business reset failed', error?.message || data);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.error('Cloud business reset failed', e);
+      return false;
+    }
+  },
+
   resetBusinessData(adminUser?: { id: string; name: string; role: string }): void {
     // 1. Snapshot current shop profile & identity settings to ensure absolute retention
     const preservedShopSettings = this.getReceiptSettings();
@@ -794,16 +517,20 @@ export const storageService = {
     this.saveAuditLogs([resetLog]);
   },
 
-  // Reset demo data
+  // Clear only browser caches/drafts. Never restore demo business data.
   resetAllData(): void {
-    localStorage.clear();
-    this.saveMedications(INITIAL_MEDICATIONS);
-    this.savePrescriptions(INITIAL_PRESCRIPTIONS);
-    this.saveTests(INITIAL_TESTS);
-    this.saveReceiptSettings(INITIAL_RECEIPT_SETTINGS);
-    this.saveUsers(DEMO_USERS);
-    this.saveActiveUser(DEMO_USERS[0]);
-    this.saveAuditLogs(INITIAL_AUDIT_LOGS);
+    for (const key of [
+      STORAGE_KEYS.MEDICATIONS,
+      STORAGE_KEYS.PRESCRIPTIONS,
+      STORAGE_KEYS.TESTS,
+      STORAGE_KEYS.TRANSACTIONS,
+      STORAGE_KEYS.OFFLINE_QUEUE,
+      STORAGE_KEYS.AUDIT_LOGS,
+      STORAGE_KEYS.ACTIVE_USER,
+      STORAGE_KEYS.USERS,
+    ]) {
+      try { localStorage.removeItem(key); } catch {}
+    }
   },
 
   // ------------------------------------------------------------------
@@ -912,9 +639,11 @@ export const storageService = {
     }
   },
 
-  async pushTransactionToCloud(t: SaleTransaction): Promise<boolean> {
+  async pushTransactionToCloud(t: SaleTransaction): Promise<SaleSyncResult> {
     const client = getSupabase();
-    if (!client) return false;
+    if (!client) {
+      return { ok: false, permanent: false, message: 'The database is not configured.' };
+    }
     try {
       const { data, error } = await client.rpc('complete_sale', {
         p_transaction: transactionToRow(t),
@@ -922,15 +651,52 @@ export const storageService = {
       if (error || !data?.ok) {
         const detail = error?.message || (data ? JSON.stringify(data) : 'No response from complete_sale RPC');
         console.error('Atomic sale synchronization failed:', detail);
-        return false;
+        return {
+          ok: false,
+          permanent: isPermanentSaleRejection(error),
+          message: detail,
+        };
       }
-      return true;
+      return { ok: true };
     } catch (e) {
-      console.error('Atomic sale synchronization failed:', e instanceof Error ? e.message : String(e));
-      return false;
+      // A thrown error is a transport failure (offline, DNS, TLS). The server
+      // never reached a decision, so the sale is still worth retrying.
+      const message = e instanceof Error ? e.message : String(e);
+      console.error('Atomic sale synchronization failed:', message);
+      return { ok: false, permanent: false, message };
     }
   },
 };
+
+/**
+ * Distinguishes a sale the server has *refused* from one it never decided on.
+ *
+ * A refusal will never succeed on retry -- the stock is gone, the price moved,
+ * the batch expired -- so requeuing it forever hides a sale that needs a human.
+ * A transport failure, by contrast, must be retried or the sale is lost.
+ */
+function isPermanentSaleRejection(error: { code?: string; message?: string } | null): boolean {
+  if (!error) {
+    // `data.ok` was falsy without an error: the function ran and declined.
+    return true;
+  }
+  // PostgreSQL raise_exception, i.e. one of complete_sale's own guards.
+  if (error.code === 'P0001') return true;
+  const message = (error.message || '').toLowerCase();
+  if (!message) return false;
+  return [
+    'sale rejected',
+    'cannot sell',
+    'insufficient',
+    'does not exist',
+    'not found',
+    'has expired',
+    'is expired',
+    'exceeds',
+    'unsupported payment',
+    'required',
+  ].some((phrase) => message.includes(phrase));
+}
 
 // ------------------------------------------------------------------
 // camelCase (app) <-> snake_case (Supabase) row mappers

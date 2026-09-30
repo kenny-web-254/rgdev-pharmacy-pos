@@ -87,6 +87,52 @@ Two consequences, both now handled:
   repository's and whose `get diagnostics` assertion and `(select auth.uid())`
   form are preserved.
 
+### 2.1b SECOND ROOT CAUSE: every sale raises 22P02 in the database
+
+**Confirmed by executing the live function's logic on 30 September 2026.**
+
+`private.complete_sale` in the live database contains, in its
+`inventory_movements` insert:
+
+```sql
+'Sale ' || p_transaction->>'id'
+```
+
+`||` and `->>` share precedence in PostgreSQL and are **left-associative**, so
+this groups as `('Sale ' || p_transaction) ->> 'id'`. Concatenating `text` with
+`jsonb` coerces the literal to JSON, which fails:
+
+```
+22P02  invalid input syntax for type json
+DETAIL: Token "Sale" is invalid.
+```
+
+That statement runs on **every line of every sale**, so every sale raised 22P02
+and the whole transaction rolled back. Stock was correctly left untouched —
+which is precisely the reported symptom.
+
+Introduced by migration `20260921093234_production_hardening_workflow_audit_and_security.sql`
+line 342. The timeline matches exactly:
+
+| Date | Event |
+|---|---|
+| 20 Sep | One sale succeeds under the previous definition, which had no `inventory_movements` insert |
+| 21 Sep | `20260921093234` adds that insert, carrying the precedence bug |
+| 21–30 Sep | **Zero** sales, **zero** `inventory_movements`, **zero** audit rows |
+
+The zero `inventory_movements` count was the tell: a table that a working
+`complete_sale` writes to on every line had never received a single row.
+
+- **Fixed in:** the migration, by parenthesising the operand.
+- **How it was verified:** an isolated `zz_saletest` schema was created in the
+  database with exact structural copies of the seven relevant tables (`LIKE ...
+  INCLUDING ALL`, no data copied), the migration's function was installed
+  against it, and eleven cases were executed. The schema was then dropped and
+  production row counts re-checked as unchanged. See `TESTING_REPORT.md`.
+
+**There were therefore two independent blockers, and both had to be fixed:** the
+build never shipped (§2.1) and the database rejected every sale (§2.1b).
+
 ### 2.2 The repository does not compile — *critical*
 
 `npm run lint` (`tsc --noEmit`) failed with **19 errors** on `main`. Both the

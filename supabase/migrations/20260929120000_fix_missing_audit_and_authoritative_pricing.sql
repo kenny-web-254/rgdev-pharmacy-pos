@@ -20,7 +20,24 @@
 --     `(select auth.uid())` form and its exception re-raise -- rather than
 --     reverting those improvements.
 --
--- The only behavioural change is pricing authority, described at part 2.
+--   * CONFIRMED ROOT CAUSE OF THE SALES FAILURE: the live complete_sale (and
+--     migration 20260921093234 line 342, which introduced it) writes
+--         'Sale ' || p_transaction->>'id'
+--     `||` and `->>` share precedence and are left-associative, so this groups
+--     as ('Sale ' || p_transaction) ->> 'id'. Concatenating text with jsonb
+--     coerces the literal to json, which fails: 22P02, "Token \"Sale\" is
+--     invalid". That statement is the inventory_movements insert, reached on
+--     EVERY sale, so every sale raised 22P02 and rolled back.
+--
+--     This exactly matches the observed timeline: one successful sale on
+--     20 September under the previous definition, then 20260921093234 added the
+--     inventory_movements insert on 21 September, and from that point there are
+--     zero sales, zero inventory_movements and zero audit rows.
+--
+--     Fixed below by parenthesising the operand. Verified by executing the
+--     function against an isolated sandbox schema.
+--
+-- The other behavioural change is pricing authority, described at part 2.
 -- ---------------------------------------------------------------------------
 
 -- Additive and nullable: preserves every existing audit row.
@@ -277,7 +294,7 @@ begin
     )
     select
       m.id, m.name, 'SALE', -v_qty, v_previous_stock, v_new_stock,
-      m.batch_number, 'Sale ' || p_transaction->>'id', (select auth.uid()), v_name,
+      m.batch_number, 'Sale ' || (p_transaction->>'id'), (select auth.uid()), v_name,
       p_transaction->>'id'
     from public.medications m
     where m.id=v_med_id;
